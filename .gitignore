@@ -1,0 +1,61 @@
+# ── Python ─────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual Environment ───────────────────────────────────
+.venv/
+venv/
+ENV/
+
+# ── Environment Variables ─────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── IDE / Editor ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Testing ───────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ── Docker ────────────────────────────────────────────────
+*.log
+docker-compose.override.yml
+
+# ── Node / Dashboard ─────────────────────────────────────
+node_modules/
+dashboard/node_modules/
+dashboard/dist/
+dashboard/build/
+.next/
+
+# ── ML Models (large files, don't commit) ─────────────────
+*.bin
+*.pt
+*.onnx
+models/
+
+# ── Database ──────────────────────────────────────────────
+*.db
+*.sqlite3
+
+# ── Misc ──────────────────────────────────────────────────
+*.bak
+*.tmp
