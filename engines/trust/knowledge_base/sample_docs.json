@@ -1,0 +1,188 @@
+{
+  "customer_chatbot": [
+    {
+      "id": "cc_001",
+      "title": "Return and Refund Policy",
+      "use_case": "customer_chatbot",
+      "content": "Acme Corp accepts returns on most items within 30 days of the delivery date, provided the item is in its original condition with all packaging and accessories included. Electronics must be unopened or show no signs of use to qualify for a full refund; opened electronics are eligible for exchange or store credit only. To initiate a return, customers can log into their Acme account, navigate to Order History, and select Return Item — a prepaid shipping label will be generated within 24 hours. Refunds are processed within 5-7 business days of the returned item being received at our fulfillment center. Items purchased during clearance sales are final sale and cannot be returned. Gift card purchases are non-refundable under any circumstances."
+    },
+    {
+      "id": "cc_002",
+      "title": "Shipping Policy",
+      "use_case": "customer_chatbot",
+      "content": "Acme Corp offers two shipping options for domestic orders. Standard shipping is free on all orders over $50 and delivers within 5-7 business days; orders under $50 incur a flat $5.99 standard shipping fee. Express shipping is available on all orders for $12.99 and delivers within 2-3 business days. Shipping estimates begin from the time the order is confirmed and processed, not from the time the order is placed. Orders placed before 2:00 PM EST on business days are typically processed same-day. Acme Corp does not currently offer same-day or overnight delivery. International shipping is available to Canada and the UK only, with rates calculated at checkout based on package weight and destination."
+    },
+    {
+      "id": "cc_003",
+      "title": "Product Warranty Information",
+      "use_case": "customer_chatbot",
+      "content": "All electronics purchased from Acme Corp are covered by a 1-year limited warranty from the date of purchase. This warranty covers defects in materials and workmanship under normal use conditions. Accessories, including cases, cables, chargers, and screen protectors, are covered by a 90-day limited warranty. The warranty does not cover damage caused by misuse, accidental drops, water exposure, unauthorized modifications, or normal wear and tear. To file a warranty claim, customers should contact Acme Support with their order number and a description of the issue, along with photos of the defect. Approved warranty claims are fulfilled via replacement; Acme Corp does not offer cash refunds on warranty claims."
+    },
+    {
+      "id": "cc_004",
+      "title": "Payment Methods and Security",
+      "use_case": "customer_chatbot",
+      "content": "Acme Corp accepts Visa, Mastercard, American Express, Discover, PayPal, Apple Pay, and Google Pay for all online purchases. All payment information is encrypted using industry-standard 256-bit TLS encryption and is never stored on Acme Corp servers in plain text. Acme Corp is PCI DSS Level 1 compliant, the highest level of payment security certification. Customers may also use Acme Store Credit or gift cards, which can be combined with a credit card for a single transaction. For orders over $200, customers may use Klarna or Afterpay to split the purchase into 4 interest-free installments. If a payment is declined, customers should verify their billing address matches their card issuer's records and ensure sufficient funds are available."
+    },
+    {
+      "id": "cc_005",
+      "title": "Customer Support Hours and Contact Channels",
+      "use_case": "customer_chatbot",
+      "content": "Acme Corp customer support is available Monday through Friday, 9:00 AM to 6:00 PM Eastern Standard Time. Support is closed on weekends and major US holidays including New Year's Day, Memorial Day, Independence Day, Labor Day, Thanksgiving, and Christmas Day. Customers can reach the support team via live chat on acmecorp.com, by emailing support@acmecorp.com, or by calling 1-800-ACME-HELP (1-800-226-3435). Live chat typically has the shortest wait time, averaging under 2 minutes during business hours. Email inquiries receive a response within 24 business hours. For urgent issues outside business hours, customers can submit a ticket through the Help Center and it will be prioritized when the support team opens the next business day."
+    },
+    {
+      "id": "cc_006",
+      "title": "Order Cancellation Policy",
+      "use_case": "customer_chatbot",
+      "content": "Orders may be cancelled free of charge within 1 hour of placement, provided the order has not yet entered the fulfillment process. To cancel an order, customers should log into their Acme account, go to Order History, select the order, and click Cancel Order. If the Cancel option is no longer available, the order has already been picked and packed and cannot be cancelled — customers should instead wait for delivery and initiate a return. Orders with express shipping enter fulfillment immediately and may not be eligible for cancellation. Cancelled orders are refunded to the original payment method within 3-5 business days. Partially shipped orders cannot be cancelled; the customer should refuse delivery or return the item upon arrival."
+    },
+    {
+      "id": "cc_007",
+      "title": "Damaged or Incorrect Item Resolution",
+      "use_case": "customer_chatbot",
+      "content": "If a customer receives a damaged, defective, or incorrect item, Acme Corp will resolve the issue at no cost. Customers must report damaged or incorrect items within 48 hours of delivery by contacting Acme Support with their order number and clear photos showing the issue. For damaged items, Acme Corp will ship a replacement at no charge via express shipping or issue a full refund — the customer's choice. The damaged item does not need to be returned; customers may dispose of it or recycle it at their discretion. For incorrect items, Acme Corp will ship the correct item immediately and provide a prepaid return label for the wrong item. If the correct item is out of stock, a full refund will be issued automatically within 3-5 business days."
+    },
+    {
+      "id": "cc_008",
+      "title": "Account Management and Password Reset",
+      "use_case": "customer_chatbot",
+      "content": "Customers can manage their Acme Corp account by logging in at acmecorp.com/account. From the account dashboard, customers can update their name, email address, shipping addresses, saved payment methods, and communication preferences. To reset a forgotten password, click Forgot Password on the login page and enter the email address associated with the account — a password reset link will be sent within 5 minutes. The reset link expires after 24 hours. For security purposes, Acme Corp requires passwords to be at least 10 characters long and include at least one uppercase letter, one number, and one special character. Customers who suspect unauthorized access to their account should immediately reset their password and contact Acme Support to review recent activity."
+    },
+    {
+      "id": "cc_009",
+      "title": "Price Match Guarantee Policy",
+      "use_case": "customer_chatbot",
+      "content": "Acme Corp offers a price match guarantee within 7 days of purchase. If a customer finds an identical item sold by an authorized US retailer at a lower price within 7 days of their Acme Corp purchase date, Acme Corp will refund the difference. To request a price match, customers should contact Acme Support with their order number and a link to the lower-priced listing. The competing price must be for the same brand, model, color, and condition (new), and the item must be in stock and available for immediate purchase at the competing retailer. Price matching does not apply to clearance items, open-box deals, auction sites, third-party marketplace sellers, or pricing errors. The price match is issued as a refund to the original payment method within 5-7 business days."
+    },
+    {
+      "id": "cc_010",
+      "title": "Promotional Codes and Discount Policy",
+      "use_case": "customer_chatbot",
+      "content": "Acme Corp promotional codes can be applied at checkout by entering the code in the Promo Code field and clicking Apply. Only one promotional code may be used per order; codes cannot be stacked or combined with other promotional offers. Promotional codes have expiration dates printed on the code or in the promotional email and become invalid after midnight EST on the expiration date. Codes cannot be applied retroactively to orders that have already been placed. Employee discount codes are non-transferable and are intended for personal use only. New customer welcome codes (typically 15% off first order) are limited to one use per email address and are valid for 30 days from account creation. Acme Corp reserves the right to void orders that use promotional codes in violation of these terms."
+    }
+  ],
+  "hr_copilot": [
+    {
+      "id": "hr_001",
+      "title": "Sick Leave Policy",
+      "use_case": "hr_copilot",
+      "content": "Acme Corp provides all full-time employees with 10 paid sick days per calendar year, effective from the first day of employment. Sick leave does not accrue — the full 10-day entitlement is available from January 1st each year and does not carry forward to the following calendar year. Employees should notify their direct manager as early as possible, and no later than their scheduled start time, on any day they are unable to attend work due to illness. For absences of four or more consecutive days, the Company may request a medical certificate from a licensed healthcare provider. Sick leave may be used for the employee's own illness, medical appointments, or to care for an immediate family member (spouse, child, or parent) who is ill. Part-time employees are entitled to a pro-rated number of sick days based on their contracted hours relative to a full-time schedule."
+    },
+    {
+      "id": "hr_002",
+      "title": "Annual Leave and Vacation Policy",
+      "use_case": "hr_copilot",
+      "content": "Full-time employees at Acme Corp accrue 15 days of paid annual leave per calendar year, beginning on their date of hire. Annual leave accrues at a rate of 1.25 days per month. Employees with 5 or more years of continuous service are eligible for 20 days of annual leave per year. Leave requests must be submitted through the Acme HR portal at least 2 weeks in advance and require approval from the employee's direct manager. Managers should respond to leave requests within 3 business days. A maximum of 5 unused annual leave days may be carried forward to the following calendar year; any balance exceeding 5 days will be forfeited on December 31st. Employees are encouraged to use their full leave entitlement each year for health and well-being. Upon termination or resignation, unused accrued leave will be paid out in the employee's final paycheck."
+    },
+    {
+      "id": "hr_003",
+      "title": "Remote and Hybrid Work Policy",
+      "use_case": "hr_copilot",
+      "content": "Acme Corp supports a hybrid work model in which eligible employees may work remotely for a maximum of 3 days per week, with the remaining days spent in the office. Remote work eligibility is determined by role requirements and manager approval; certain positions in warehouse operations, facilities, and on-site support are not eligible for remote work. Employees working remotely must be available during core business hours (10:00 AM to 4:00 PM in their local time zone) and reachable via Slack and email. Remote work arrangements must be documented in the Acme HR portal and reviewed quarterly. The Company provides a one-time $500 home office stipend for employees approved for hybrid work to purchase ergonomic equipment. Employees are expected to maintain a secure, distraction-free workspace and comply with all Company data security policies when working remotely. The Company reserves the right to modify or revoke remote work privileges with 2 weeks' notice based on business needs."
+    },
+    {
+      "id": "hr_004",
+      "title": "Performance Review and Development Process",
+      "use_case": "hr_copilot",
+      "content": "Acme Corp conducts formal performance reviews twice per year, in June and December. The review process includes a written self-assessment by the employee, a manager assessment, and a one-on-one calibration meeting between the employee and their direct manager. Performance is evaluated on a 5-point scale: Exceptional (5), Exceeds Expectations (4), Meets Expectations (3), Needs Improvement (2), and Unsatisfactory (1). Employees receiving a rating of 4 or 5 are eligible for merit-based salary increases and promotion consideration. Employees receiving a rating of 2 must be placed on a documented Performance Improvement Plan (PIP) lasting 60 days, with clearly defined milestones. A rating of 1 in two consecutive review cycles may result in termination. All performance review documentation is retained in the employee's HR file and is confidential between the employee, their manager, and the HR department."
+    },
+    {
+      "id": "hr_005",
+      "title": "Parental and Family Leave Policy",
+      "use_case": "hr_copilot",
+      "content": "Acme Corp provides 12 weeks of fully paid parental leave to all full-time employees following the birth, adoption, or foster placement of a child. Parental leave is available to all parents regardless of gender and may be taken in a single continuous block or in increments of no less than 2 weeks, with manager approval, within 12 months of the qualifying event. Employees must provide at least 30 days' advance notice when the leave date is foreseeable. During parental leave, all employee benefits including health insurance, dental, and vision coverage continue without interruption, and the employee's position or an equivalent role is guaranteed upon return. In addition to parental leave, employees may use accrued sick leave and annual leave to extend their time off. Employees who have been with the Company for less than 6 months are eligible for 6 weeks of paid parental leave. The Company also offers 3 days of paid bereavement leave for the loss of an immediate family member."
+    },
+    {
+      "id": "hr_006",
+      "title": "Expense Reimbursement Policy",
+      "use_case": "hr_copilot",
+      "content": "Employees may submit business-related expenses for reimbursement up to $500 per quarter without prior managerial approval. Expenses exceeding $500 in a single quarter require written pre-approval from the employee's direct manager before the expense is incurred. Reimbursable expenses include business travel (flights, hotels, ground transportation), client meals and entertainment, professional development materials, and required software licenses not provided by IT. All expense reports must be submitted through the Acme Expense Portal within 30 days of the expense date, accompanied by itemized receipts. Expense reports are reviewed by the Finance team and reimbursed via direct deposit within 10 business days of approval. Alcohol is reimbursable at client meals only, with a maximum of $50 per person. Personal expenses, commuting costs, and home internet bills are not eligible for reimbursement. Repeated violations of this policy may result in suspension of reimbursement privileges."
+    },
+    {
+      "id": "hr_007",
+      "title": "Employee Benefits and Compensation Overview",
+      "use_case": "hr_copilot",
+      "content": "Acme Corp offers a comprehensive benefits package to all full-time employees. Health insurance is provided through Blue Cross Blue Shield, with the Company covering 80% of the monthly premium for employees and 60% for dependents. Dental and vision coverage is offered through Delta Dental and VSP, respectively, with the Company covering 100% of the employee-only premium. Acme Corp matches employee 401(k) contributions up to 4% of base salary, with immediate vesting. The Company also provides employer-paid life insurance at 1x annual salary, short-term disability coverage at 60% of base salary for up to 12 weeks, and long-term disability coverage at 50% of base salary. Employees receive a $1,200 annual wellness stipend that can be used for gym memberships, mental health services, or fitness equipment. Compensation reviews are conducted annually in January, aligned with the December performance review cycle."
+    },
+    {
+      "id": "hr_008",
+      "title": "Code of Business Conduct and Ethics",
+      "use_case": "hr_copilot",
+      "content": "All Acme Corp employees are expected to conduct themselves with integrity, respect, and professionalism in every interaction with colleagues, customers, vendors, and partners. The Company maintains a zero-tolerance policy for discrimination, harassment, bullying, or retaliation of any kind based on race, gender, age, sexual orientation, religion, disability, national origin, or any other protected characteristic. Employees must disclose any actual or potential conflicts of interest to their manager and the HR department promptly. Accepting gifts from vendors or clients exceeding $75 in value requires written approval from the employee's department head. Confidential Company information, including trade secrets, customer data, financial records, and proprietary technology, must not be shared with unauthorized parties. Violations of this code may result in disciplinary action up to and including immediate termination. Employees are encouraged to report suspected violations through the Acme Ethics Hotline, which allows anonymous reporting."
+    },
+    {
+      "id": "hr_009",
+      "title": "Employee Onboarding Process",
+      "use_case": "hr_copilot",
+      "content": "New employees at Acme Corp participate in a structured 2-week onboarding program beginning on their first day. During Week 1, new hires complete required compliance training (information security, anti-harassment, data privacy), set up their Company accounts and equipment, and meet with their direct manager to review role expectations and 90-day goals. During Week 2, new hires are paired with an onboarding buddy — a peer employee in the same department — who provides guidance and answers questions for the first 60 days. All new employees must complete the Acme Culture and Values workshop within their first 30 days. IT equipment, including a laptop, monitor, keyboard, and headset, is provisioned by the IT department and shipped to the employee's primary work location before their start date. New hires in engineering roles also complete a technical onboarding track covering the Company's development stack, deployment processes, and code review standards. Managers are expected to conduct a 30-day check-in to assess the new hire's integration and address any concerns."
+    },
+    {
+      "id": "hr_010",
+      "title": "Disciplinary and Grievance Procedure",
+      "use_case": "hr_copilot",
+      "content": "Acme Corp follows a progressive discipline process for performance or conduct issues that do not constitute gross misconduct. The steps are: (1) verbal warning documented in the employee's HR file, (2) written warning with specific improvement expectations and a 30-day review period, (3) final written warning with a formal Performance Improvement Plan, and (4) termination. Gross misconduct — including theft, violence, harassment, fraud, or willful data breaches — may result in immediate termination without prior warnings. Employees who wish to raise a grievance should first attempt to resolve the matter directly with their manager. If resolution is not achieved, the employee may submit a formal grievance in writing to the HR department within 10 business days. HR will investigate and respond within 15 business days. Employees may appeal any disciplinary decision to the VP of People within 5 business days of receiving the decision. All grievance proceedings are confidential, and the Company strictly prohibits retaliation against employees who file grievances in good faith."
+    }
+  ],
+  "finance_tool": [
+    {
+      "id": "fin_001",
+      "title": "Q1 2026 Revenue Performance Summary",
+      "use_case": "finance_tool",
+      "content": "Acme Corp delivered Q1 2026 net revenue of $4.2M, representing 12% year-over-year growth versus Q1 2025 ($3.75M). Growth was primarily driven by a 19% increase in average order value to $87, partially offset by a 6% decline in new customer acquisitions due to reduced paid media spend in January. North America remained the dominant market at 68% of total revenue ($2.86M), with Europe contributing 22% ($924K) and Asia Pacific contributing the remaining 10% ($420K). Gross margin held steady at 62%, consistent with Q4 2025, reflecting disciplined supplier negotiations and improved logistics efficiency. Q1 EBITDA came in at $1.008M (24% margin), slightly above the $980K forecast. Total orders processed were 48,276, up 4% QoQ from Q4 2025."
+    },
+    {
+      "id": "fin_002",
+      "title": "Q2 2026 Revenue Performance Summary",
+      "use_case": "finance_tool",
+      "content": "Acme Corp achieved Q2 2026 net revenue of $4.8M, reflecting 14% year-over-year growth versus Q2 2025 ($4.21M) and 14.3% sequential growth from Q1 2026. The acceleration was driven by the successful launch of the Acme Pro Accessories line in April, which contributed $620K in incremental revenue, and a 12% increase in repeat purchase rate. Average order value remained stable at $89. North America contributed $3.26M (68%), Europe contributed $1.056M (22%), and Asia Pacific contributed $480K (10%). Gross margin improved to 63.5%, up 150 basis points QoQ, driven by favorable product mix shift toward higher-margin accessories. EBITDA for Q2 reached $1.20M (25% margin), exceeding the internal target of $1.15M. Monthly active users grew to 84,000, a 7% increase from Q1."
+    },
+    {
+      "id": "fin_003",
+      "title": "Geographic Revenue Breakdown FY2026",
+      "use_case": "finance_tool",
+      "content": "Acme Corp's revenue concentration remains heavily weighted toward North America, which accounts for 68% of total revenue across both Q1 and Q2 2026. The North American business generated $6.12M in H1 2026, up 13% from $5.42M in H1 2025, driven primarily by organic traffic growth and improved conversion rates on the US storefront. Europe represents 22% of total revenue ($1.98M in H1 2026), with the UK being the single largest European market at 14% of total revenue, followed by Germany at 5% and France at 3%. Asia Pacific accounts for 10% of total revenue ($900K in H1 2026), with growth constrained by limited localized marketing investment and higher last-mile delivery costs. Management has approved a $350K expansion budget for APAC in H2 2026, targeting Japan and Australia for localized storefronts. Currency fluctuations had a net negative impact of $42K on European revenue due to EUR/USD weakness in Q2."
+    },
+    {
+      "id": "fin_004",
+      "title": "Customer Acquisition Cost Analysis",
+      "use_case": "finance_tool",
+      "content": "Acme Corp's blended customer acquisition cost (CAC) for H1 2026 was $142, up 8% from $131 in H1 2025, reflecting increased competition in paid search and rising CPMs across Meta and Google Ads platforms. CAC varies significantly by channel: paid search ($98), paid social ($167), affiliate marketing ($84), and organic/referral ($12). The highest CAC is in the Asia Pacific region at $198, compared to $134 in North America and $156 in Europe. CAC payback period is currently 4.2 months, within the target threshold of 6 months. The LTV:CAC ratio stands at 4.8:1, indicating healthy unit economics. Management is investing in content marketing and SEO to shift the acquisition mix toward lower-cost organic channels, targeting a blended CAC of $130 by Q4 2026. Retargeting campaigns through email and push notifications have shown a 38% lower CAC than cold acquisition campaigns."
+    },
+    {
+      "id": "fin_005",
+      "title": "Monthly Active Users and Engagement Report",
+      "use_case": "finance_tool",
+      "content": "Acme Corp's monthly active users (MAU) reached 84,000 as of June 2026, representing 7% growth from 78,500 in March 2026 and 22% growth year-over-year from 69,000 in June 2025. The mobile app accounted for 61% of MAU (51,240 users), up from 54% in Q1, reflecting the impact of the app redesign launched in April 2026. Desktop web contributed 33% (27,720) and mobile web contributed 6% (5,040). Average session duration was 6.8 minutes, up from 6.2 minutes in Q1, and pages per session increased to 4.3 from 3.9. Conversion rate (session to purchase) was 3.2%, stable QoQ. The cohort retention rate at 90 days was 34%, up from 31% in Q4 2025. DAU/MAU ratio (stickiness) stood at 0.28, within the benchmark range for e-commerce. Push notification opt-in rate was 42%, providing a cost-effective re-engagement channel."
+    },
+    {
+      "id": "fin_006",
+      "title": "Gross Margin and Unit Economics Analysis",
+      "use_case": "finance_tool",
+      "content": "Acme Corp maintained a blended gross margin of 62% in H1 2026, consistent with the full-year target of 61-63%. Electronics carry a gross margin of 48%, while accessories deliver 78%, making product mix a critical lever for overall margin performance. Cost of goods sold (COGS) for H1 2026 totaled $3.42M against $9.0M in net revenue. Fulfillment and shipping costs represented 12% of revenue, down from 14% in H1 2025 due to renegotiated carrier contracts and optimized warehouse routing. Average order value was $87, with an average of 2.1 items per order. Contribution margin after variable costs (COGS + fulfillment + payment processing) was 46%. The Company targets a minimum gross margin of 60% for all new product categories introduced in H2 2026. Returns and refunds accounted for 4.3% of gross revenue, within the industry benchmark of 5-7% for online retail."
+    },
+    {
+      "id": "fin_007",
+      "title": "R&D Investment and Allocation Report",
+      "use_case": "finance_tool",
+      "content": "Acme Corp allocated 18% of total revenue to research and development in H1 2026, equating to $1.62M across the period. R&D spend is distributed across four focus areas: platform engineering (45%, $729K), AI and personalization (25%, $405K), mobile app development (20%, $324K), and data infrastructure (10%, $162K). The engineering team grew from 42 to 48 headcount during H1 2026, with 80% of R&D spend going to compensation and benefits. Key deliverables in H1 included the mobile app redesign (shipped April), the AI-powered product recommendation engine (shipped May, driving a 9% increase in cross-sell revenue), and the real-time inventory management system (in progress, expected September launch). R&D efficiency, measured as incremental revenue per R&D dollar, was $2.40 in H1 2026 versus $1.90 in H1 2025. Management plans to maintain R&D investment at 17-19% of revenue through FY2027."
+    },
+    {
+      "id": "fin_008",
+      "title": "EBITDA and Profitability Summary",
+      "use_case": "finance_tool",
+      "content": "Acme Corp generated H1 2026 EBITDA of $2.208M, representing a 24% EBITDA margin on $9.0M in net revenue. This reflects a 200 basis point improvement from 22% EBITDA margin in H1 2025, driven by operating leverage and gross margin stability. Operating expenses (excluding COGS) totaled $3.37M in H1, comprising: sales and marketing (38%, $1.28M), R&D (48%, $1.62M), and general and administrative (14%, $472K). Sales and marketing as a percentage of revenue decreased from 16% to 14.2%, reflecting improved channel efficiency. Net income for H1 2026 was $1.58M after depreciation ($210K), interest expense ($48K), and taxes at an effective rate of 24%. Free cash flow was $1.72M, with cash and equivalents of $3.8M on the balance sheet as of June 30, 2026. The Company has no long-term debt. Net revenue retention (NRR) was 108%, indicating healthy expansion revenue from existing customers."
+    },
+    {
+      "id": "fin_009",
+      "title": "Approved KPI Definitions and Calculation Standards",
+      "use_case": "finance_tool",
+      "content": "This document defines the standard calculation methodology for all key performance indicators (KPIs) reported in Acme Corp financial documents. Net Revenue is defined as gross revenue minus returns, discounts, and credit adjustments. Gross Margin is calculated as (Net Revenue - COGS) / Net Revenue, expressed as a percentage. EBITDA is calculated as Net Income + Interest + Taxes + Depreciation + Amortization. Customer Acquisition Cost (CAC) is total sales and marketing spend divided by the number of new customers acquired in the period. Monthly Active Users (MAU) is the count of unique users who logged in or made a purchase within a 30-day period. Average Order Value (AOV) is net revenue divided by total orders in the period. Net Revenue Retention (NRR) is the revenue from existing customers in the current period divided by revenue from the same cohort in the prior period, expressed as a percentage. LTV is calculated as AOV × purchase frequency × average customer lifespan. All financial figures are reported in USD unless otherwise specified."
+    },
+    {
+      "id": "fin_010",
+      "title": "FY2026 Budget Allocation and Forecast",
+      "use_case": "finance_tool",
+      "content": "Acme Corp's FY2026 board-approved budget projects full-year net revenue of $19.2M, representing 15% year-over-year growth versus FY2025 actuals of $16.7M. The revenue forecast assumes H2 2026 revenue of $10.2M, driven by holiday season demand (Q4 historically contributes 32% of annual revenue) and the APAC market expansion. Total operating budget for FY2026 is $15.36M, allocated as follows: COGS (38%, $7.30M), sales and marketing (14%, $2.69M), R&D (18%, $3.46M), G&A (6%, $1.15M), and targeted EBITDA (24%, $4.61M). Capital expenditure budget is $480K, primarily for warehouse automation equipment ($320K) and office buildout for the Austin headquarters expansion ($160K). Headcount is budgeted to grow from 486 to 520 employees by year-end, with 22 of the 34 new hires in engineering and product roles. The budget assumes USD/EUR exchange rate of 1.08 and no material supply chain disruptions. Board review of H2 forecast is scheduled for September 2026."
+    }
+  ]
+}
