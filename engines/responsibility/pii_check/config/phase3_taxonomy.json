@@ -1,0 +1,42 @@
+{
+  "organizations": {
+    "Microsoft Corporation": ["Microsoft", "MSFT"]
+  },
+  "people": {
+    "Dr. Zorven Kahl": ["Dr. Zorven Kahl", "Zorven Kahl"]
+  },
+  "projects": {
+    "Project Orion": ["Project Orion", "Orion"]
+  },
+  "domain_terms": {
+    "supplier": ["supplier", "vendor"],
+    "business_unit": ["business unit", "division"]
+  },
+  "semantic": {
+    "INTERNAL_PROJECT": {
+      "references": ["confidential internal product roadmap and unreleased features", "internal project code name and launch strategy", "employee-only engineering planning document"],
+      "keywords": ["unreleased", "roadmap", "launch strategy", "internal"],
+      "negative_keywords": ["explain", "definition", "example"]
+    },
+    "FINANCIAL_INFORMATION": {
+      "references": ["non-public quarterly financial results and revenue forecast", "confidential merger acquisition valuation and earnings forecast", "internal budget and sales forecast before public release"],
+      "keywords": ["pricing", "revenue", "forecast", "acquisition", "enterprise increase", "renewal prices"],
+      "negative_keywords": ["explain", "concept", "generic"]
+    },
+    "CUSTOMER_INFORMATION": {
+      "references": ["confidential customer account information and client contract terms", "private customer usage data and account history", "enterprise client pricing and renewal negotiation details"],
+      "keywords": ["customer", "client", "contract", "renewal", "account"],
+      "negative_keywords": ["generic", "template", "explain"]
+    },
+    "SECURITY_INFORMATION": {
+      "references": ["internal security architecture and vulnerability remediation details", "production infrastructure access design and security incident report", "unpublished penetration test findings and security weaknesses"],
+      "keywords": ["vulnerability", "penetration test", "security incident", "production access"],
+      "negative_keywords": ["explain", "example"]
+    },
+    "LEGAL_PRIVILEGED": {
+      "references": ["attorney client privileged legal advice and litigation strategy", "confidential legal counsel assessment and settlement discussion", "privileged investigation findings prepared for legal counsel"],
+      "keywords": ["attorney", "privileged", "litigation", "legal counsel"],
+      "negative_keywords": ["generic", "template", "explain"]
+    }
+  }
+}

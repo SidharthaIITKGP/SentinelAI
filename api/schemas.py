@@ -67,6 +67,34 @@ class PIIEntityType(str, Enum):
     URL = "URL"
     MEDICAL_LICENSE = "MEDICAL_LICENSE"
     NRP = "NRP"
+    IN_AADHAAR = "IN_AADHAAR"
+    IN_PAN = "IN_PAN"
+    IN_PASSPORT = "IN_PASSPORT"
+    DOMAIN_ORGANIZATION = "DOMAIN_ORGANIZATION"
+    DOMAIN_PROJECT = "DOMAIN_PROJECT"
+    DOMAIN_TERM = "DOMAIN_TERM"
+
+
+class SecretType(str, Enum):
+    """Credential categories recognized by the Phase 2 secret detector."""
+    AWS_ACCESS_KEY_ID = "AWS_ACCESS_KEY_ID"
+    GITHUB_TOKEN = "GITHUB_TOKEN"
+    GITLAB_TOKEN = "GITLAB_TOKEN"
+    OPENAI_API_KEY = "OPENAI_API_KEY"
+    SLACK_TOKEN = "SLACK_TOKEN"
+    JSON_WEB_TOKEN = "JSON_WEB_TOKEN"
+    PRIVATE_KEY = "PRIVATE_KEY"
+    GENERIC_CREDENTIAL = "GENERIC_CREDENTIAL"
+    POSSIBLE_SECRET = "POSSIBLE_SECRET"
+
+
+class ConfidentialCategory(str, Enum):
+    """Contextual business-information categories detected in Phase 3."""
+    INTERNAL_PROJECT = "INTERNAL_PROJECT"
+    FINANCIAL_INFORMATION = "FINANCIAL_INFORMATION"
+    CUSTOMER_INFORMATION = "CUSTOMER_INFORMATION"
+    SECURITY_INFORMATION = "SECURITY_INFORMATION"
+    LEGAL_PRIVILEGED = "LEGAL_PRIVILEGED"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -75,15 +103,17 @@ class PIIEntityType(str, Enum):
 
 
 class PIIEntity(BaseModel):
-    """A single piece of PII found in text."""
+    """Safe metadata for one PII finding; raw detected values are never returned."""
     model_config = ConfigDict(use_enum_values=True)
 
     entity_type: PIIEntityType = Field(..., description="What kind of PII (PERSON, EMAIL etc.)")
-    text: str = Field(..., description="The actual text that was flagged")
+    text: str = Field(..., description="Safe category placeholder, never the detected value")
     start: int = Field(..., description="Character position where it starts in the text")
     end: int = Field(..., description="Character position where it ends")
     score: float = Field(..., ge=0.0, le=1.0, description="Presidio's confidence score")
     redacted_placeholder: str = Field(..., description="What it gets replaced with e.g. '<PERSON>'")
+    detection_method: str = Field(default="MODEL_NER", description="MODEL_NER | DICTIONARY | ALIAS")
+    signals: List[str] = Field(default_factory=list, description="Safe evidence labels only")
 
 
 class FlaggedClaim(BaseModel):
@@ -129,7 +159,7 @@ class ModelConfig(BaseModel):
 
 
 class PolicyDecision(BaseModel):
-    """What OPA policy engine returns after evaluating risk."""
+    """Policy-engine decision after evaluating safe risk and detector signals."""
     model_config = ConfigDict(use_enum_values=True)
 
     approved: bool = Field(..., description="Is the proposed action policy-compliant?")
@@ -142,6 +172,38 @@ class PolicyDecision(BaseModel):
         ..., ge=0.0, le=1.0,
         description="Which threshold triggered this decision"
     )
+    policy_rule_ids: List[str] = Field(
+        default_factory=list,
+        description="Safe identifiers for the policy rules that determined the action",
+    )
+
+
+class PolicyEvaluationRequest(BaseModel):
+    """Safe inputs for independently evaluating the Phase 4 policy configuration."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    use_case: UseCase
+    risk_score: float = Field(..., ge=0.0, le=1.0)
+    pii_detected: bool = False
+    secrets_detected: bool = False
+    confidential_detected: bool = False
+    proposed_action: ActionType = ActionType.ALLOW
+
+
+class InterceptPolicyRequest(BaseModel):
+    """Safe, aggregate detector evidence used by the simulated intercept policy."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    use_case: UseCase = UseCase.CUSTOMER_CHATBOT
+    scan_target: str = Field(..., pattern="^external_llm$")
+    risk_score: float = Field(..., ge=0.0, le=1.0)
+    pii_detected: bool = False
+    secret_detected: bool = False
+    confidential_detected: bool = False
+    known_high_confidence_secret: bool = False
+    possible_secret: bool = False
+    signal_count: int = Field(default=0, ge=0)
+    proposed_action: ActionType = ActionType.ALLOW
 
 
 class RiskBreakdown(BaseModel):
@@ -205,7 +267,7 @@ class InjectionResult(BaseModel):
 
 class PIIResult(BaseModel):
     """
-    Return type of engines/responsibility/pii_detector.py.
+    Return type of engines/responsibility/pii_check/pii_detector.py.
     Called TWICE in the pipeline — once on the prompt, once on the LLM response.
     """
     model_config = ConfigDict(use_enum_values=True)
@@ -237,6 +299,163 @@ class PIIResult(BaseModel):
         else:
             self.entity_count = len(self.entities)
         return self
+
+
+class PiiTextRequest(BaseModel):
+    """Independent Responsibility Engine request for a text scan or redaction."""
+    text: str = Field(..., description="Text to inspect; the service does not log it")
+    scan_target: str = Field(default="prompt", pattern="^(prompt|response)$")
+
+
+class PiiScanResponse(BaseModel):
+    """Safe scan response with offsets and entity categories only."""
+    contains_pii: bool
+    findings: List[PIIEntity] = Field(default_factory=list)
+    risk_score: float = Field(ge=0.0, le=1.0)
+    entity_count: int = Field(ge=0)
+    high_risk_entities: List[str] = Field(default_factory=list)
+    scan_target: str
+
+
+class PiiAnonymizeResponse(PiiScanResponse):
+    """Scan response plus typed-placeholder redacted text."""
+    anonymized_text: str
+
+
+class SecretFinding(BaseModel):
+    """Safe credential metadata; credential values are never returned."""
+    model_config = ConfigDict(use_enum_values=True)
+    secret_type: SecretType
+    start: int = Field(..., ge=0)
+    end: int = Field(..., ge=0)
+    score: float = Field(..., ge=0.0, le=1.0)
+    redacted_placeholder: str
+    detection_method: str = Field(default="KNOWN_PATTERN_SECRET")
+    signals: List[str] = Field(default_factory=list)
+
+
+class SecretResult(BaseModel):
+    """Return type of engines/responsibility/pii_check/secret_detector.py."""
+    model_config = ConfigDict(use_enum_values=True)
+    found: bool
+    findings: List[SecretFinding] = Field(default_factory=list)
+    risk_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    secret_count: int = Field(default=0, ge=0)
+    high_risk_secret_types: List[str] = Field(default_factory=list)
+    scan_target: str = Field(default="prompt", pattern="^(prompt|response)$")
+
+    @model_validator(mode="after")
+    def validate_consistency(self):
+        if not self.found:
+            self.findings, self.risk_score, self.secret_count = [], 0.0, 0
+            self.high_risk_secret_types = []
+        else:
+            self.secret_count = len(self.findings)
+        return self
+
+
+class SecretTextRequest(BaseModel):
+    """Independent Responsibility Engine request for secret detection/redaction."""
+    text: str = Field(..., description="Text to inspect; the service does not log it")
+    scan_target: str = Field(default="prompt", pattern="^(prompt|response)$")
+
+
+class SecretScanResponse(BaseModel):
+    """Safe credential scan response with metadata but no credential values."""
+    contains_secrets: bool
+    findings: List[SecretFinding] = Field(default_factory=list)
+    risk_score: float = Field(ge=0.0, le=1.0)
+    secret_count: int = Field(ge=0)
+    high_risk_secret_types: List[str] = Field(default_factory=list)
+    scan_target: str
+
+
+class SecretAnonymizeResponse(SecretScanResponse):
+    anonymized_text: str
+
+
+class ConfidentialFinding(BaseModel):
+    """Safe metadata for a contextually confidential text segment."""
+    model_config = ConfigDict(use_enum_values=True)
+    category: ConfidentialCategory
+    start: int = Field(..., ge=0)
+    end: int = Field(..., ge=0)
+    score: float = Field(..., ge=0.0, le=1.0)
+    threshold: float = Field(..., ge=0.0, le=1.0)
+    redacted_placeholder: str
+    detection_method: str = Field(default="HYBRID_SEMANTIC")
+    signals: List[str] = Field(default_factory=list)
+
+
+class ConfidentialResult(BaseModel):
+    """Return type of engines/responsibility/pii_check/confidential_detector.py."""
+    model_config = ConfigDict(use_enum_values=True)
+    detected: bool
+    findings: List[ConfidentialFinding] = Field(default_factory=list)
+    risk_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    finding_count: int = Field(default=0, ge=0)
+    scan_target: str = Field(default="prompt", pattern="^(prompt|response)$")
+
+    @model_validator(mode="after")
+    def validate_consistency(self):
+        if not self.detected:
+            self.findings, self.risk_score, self.finding_count = [], 0.0, 0
+        else:
+            self.finding_count = len(self.findings)
+        return self
+
+
+class ConfidentialTextRequest(BaseModel):
+    """Independent Responsibility Engine request for contextual classification."""
+    text: str = Field(..., description="Text to inspect; the service does not log it")
+    scan_target: str = Field(default="prompt", pattern="^(prompt|response)$")
+
+
+class ConfidentialScanResponse(BaseModel):
+    """Safe semantic-classification response with no raw confidential text."""
+    contains_confidential_information: bool
+    findings: List[ConfidentialFinding] = Field(default_factory=list)
+    risk_score: float = Field(ge=0.0, le=1.0)
+    finding_count: int = Field(ge=0)
+    scan_target: str
+
+
+class ConfidentialAnonymizeResponse(ConfidentialScanResponse):
+    anonymized_text: str
+
+
+class SimulatedInterceptRequest(BaseModel):
+    """No-LLM integration request for governing text sent to an external model."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    text: str = Field(..., min_length=1, max_length=10000, description="Text to govern; never logged")
+    scan_target: str = Field(default="external_llm", pattern="^external_llm$")
+    use_case: UseCase = UseCase.CUSTOMER_CHATBOT
+
+
+class InterceptEvidence(BaseModel):
+    """Safe aggregate evidence; source text and sensitive values are excluded."""
+    pii_detected: bool
+    secret_detected: bool
+    confidential_detected: bool
+    pii_types: List[str] = Field(default_factory=list)
+    secret_types: List[str] = Field(default_factory=list)
+    confidential_categories: List[str] = Field(default_factory=list)
+    max_confidence: float = Field(ge=0.0, le=1.0)
+    policy_rule_ids: List[str] = Field(default_factory=list)
+    policy_reason: str
+
+
+class SimulatedInterceptResponse(BaseModel):
+    """Safe governance outcome from the simulated no-LLM intercept pipeline."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    action_taken: ActionType
+    risk_score: float = Field(ge=0.0, le=1.0)
+    risk_level: RiskLevel
+    evidence: InterceptEvidence
+    governed: bool = True
+    redacted_prompt: Optional[str] = None
 
 
 class BiasResult(BaseModel):
@@ -684,12 +903,17 @@ class HealthResponse(BaseModel):
 
 ALL_SCHEMAS = [
     # Enums
-    "UseCase", "RiskLevel", "ActionType", "BiasType", "PIIEntityType",
+    "UseCase", "RiskLevel", "ActionType", "BiasType", "PIIEntityType", "SecretType",
+    "ConfidentialCategory",
     # Sub-models
     "PIIEntity", "FlaggedClaim", "SupportingSource", "ModelConfig",
     "PolicyDecision", "RiskBreakdown",
     # Engine Results
-    "InjectionResult", "PIIResult", "BiasResult", "GroundednessResult",
+    "InjectionResult", "PIIResult", "PiiTextRequest", "PiiScanResponse",
+    "PiiAnonymizeResponse", "SecretFinding", "SecretResult", "SecretTextRequest",
+    "SecretScanResponse", "SecretAnonymizeResponse", "BiasResult", "GroundednessResult",
+    "ConfidentialFinding", "ConfidentialResult", "ConfidentialTextRequest",
+    "ConfidentialScanResponse", "ConfidentialAnonymizeResponse",
     # Core Pipeline
     "RiskScore", "ActionResult",
     # API Request/Response
