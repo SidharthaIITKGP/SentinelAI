@@ -9,6 +9,9 @@ tldextract>=5.3,<6.0
 sentence-transformers>=3.0,<4.0
 transformers>=4.41,<5.0
 PyYAML>=6.0,<7.0
+litellm>=1.0,<2.0
+qdrant-client>=1.7,<2.0
+python-dotenv>=1.0,<2.0
 
 # Test dependencies.
 pytest>=8.0,<9.0
