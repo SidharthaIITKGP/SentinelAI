@@ -26,7 +26,7 @@ export default function AuditLog() {
 
   const filteredLogs = logs.filter(log => {
     const matchUC = filterUC === 'ALL' || log.use_case === filterUC;
-    const matchAction = filterAction === 'ALL' || log.action?.action_taken === filterAction;
+    const matchAction = filterAction === 'ALL' || log.action?.action === filterAction;
     const matchSearch = log.prompt?.toLowerCase().includes(search.toLowerCase()) || 
                         log.request_id?.toLowerCase().includes(search.toLowerCase());
     return matchUC && matchAction && matchSearch;
@@ -35,7 +35,7 @@ export default function AuditLog() {
   const exportCSV = () => {
     const headers = "Request ID,Time,Use Case,Risk Level,Action Taken,Latency\n";
     const csv = logs.map(l => 
-      `${l.request_id},${l.timestamp},${l.use_case},${l.risk_score?.level},${l.action?.action_taken},${l.latency_ms}`
+      `${l.request_id},${l.timestamp},${l.use_case},${l.risk_score?.level},${l.action?.action},${l.latency_ms}`
     ).join("\n");
     const blob = new Blob([headers + csv], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
@@ -116,7 +116,7 @@ export default function AuditLog() {
                   {log.use_case}
                 </td>
                 <td className="p-4 font-semibold text-slate-300">
-                  {log.action?.action_taken}
+                  {log.action?.action}
                 </td>
                 <td className="p-4 text-slate-400 truncate max-w-xs">
                   {log.prompt?.substring(0, 60)}...
