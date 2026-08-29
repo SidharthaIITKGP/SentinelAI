@@ -69,6 +69,13 @@ except ImportError:
     execute_action = None
     logger.warning("action_layer not found — stubbed")
 
+try:
+    from core.action_layer import BLOCK_MESSAGES, DEFAULT_BLOCK_MESSAGE
+except ImportError:
+    BLOCK_MESSAGES = {}
+    DEFAULT_BLOCK_MESSAGE = "I'm unable to process this request."
+    logger.warning("action_layer constants not found — using defaults")
+
 # ── Aman's modules (stubbed until Day 3) ──────────────────────────────────────
 try:
     from engines.responsibility.pii_detector import detect_pii
@@ -381,6 +388,54 @@ async def run_pipeline(
     else:
         pii_prompt_result = _mock_pii_result("prompt")
         logger.debug(f"[{request_id}] detect_pii (prompt) stubbed — Aman's module")
+
+    # Prompt safety check — detect harmful/toxic prompts
+    # Catches sexual harassment, violence, illegal instructions etc.
+    # Runs on PROMPT (not response) — different from bias_detector in Step 4
+    if detect_bias is not None:
+        prompt_safety = await detect_bias(request.prompt)
+        if prompt_safety.detected and prompt_safety.score > 0.70:
+            logger.warning(
+                f"[{request_id}] HARMFUL PROMPT DETECTED — "
+                f"score={prompt_safety.score:.3f} — immediate BLOCK"
+            )
+            block_result = ActionResult(
+                action=ActionType.BLOCK,
+                final_response=BLOCK_MESSAGES.get(
+                    str(request.use_case),
+                    DEFAULT_BLOCK_MESSAGE,
+                ),
+                original_response="",
+                explanation=f"Harmful prompt detected with score {prompt_safety.score:.3f}",
+                evidence={"prompt_safety": prompt_safety.score},
+                escalation_required=True,
+            )
+            latency_ms = max(1, int((time.time() - pipeline_start) * 1000))
+            audit_entry = _build_audit_entry(
+                request_id=request_id,
+                request=request,
+                llm_response="[BLOCKED — harmful prompt]",
+                action_result=block_result,
+                injection_result=injection_result,
+                pii_prompt_result=pii_prompt_result,
+                pii_response_result=_mock_pii_result("response"),
+                groundedness_result=_mock_groundedness_result(request.use_case),
+                bias_result=prompt_safety,
+                risk_score=_mock_risk_score_high(request.use_case),
+                policy_decision=PolicyDecision(
+                    approved=False,
+                    final_action=ActionType.BLOCK,
+                    reason="Harmful prompt detected",
+                    policy_file="prompt_safety_guard",
+                    threshold_applied=0.70,
+                ),
+                model_used="none",
+                tokens_input=0,
+                tokens_output=0,
+                latency_ms=latency_ms,
+                step_latencies={"scan": latency_ms},
+            )
+            return block_result, audit_entry
 
     step_latencies["scan"] = int((time.time() - step_start) * 1000)
     logger.info(

@@ -56,17 +56,17 @@ async def lifespan(app: FastAPI):
     # TODO: await init_db()
     logger.info("[3/5] PostgreSQL connection — STUBBED (implement Day 3)")
 
-    # Step 4 — Initialize Presidio
+    # Step 4 — Initialize Presidio PII analyzer
     logger.info("[4/5] Initializing Presidio PII analyzer...")
-    # TODO: from engines.responsibility.pii_detector import init_presidio
-    # TODO: await init_presidio()
-    logger.info("[4/5] Presidio initialization — STUBBED (implement Day 2 — Aman's module)")
+    from engines.responsibility.pii_check.pii_detector import get_pii_detector
+    get_pii_detector()  # warms up Presidio singleton on startup
+    logger.info("[4/5] Presidio initialized ✅")
 
-    # Step 5 — Load OPA policies
-    logger.info("[5/5] Loading OPA policy engine...")
-    # TODO: from policy.engine import init_policy_engine
-    # TODO: await init_policy_engine()
-    logger.info("[5/5] OPA policy engine — STUBBED (implement Day 3 — Aman's module)")
+    # Step 5 — Initialize Policy Engine
+    logger.info("[5/5] Loading policy engine...")
+    from engines.responsibility.pii_check.policy.engine import get_policy_engine
+    get_policy_engine()  # warms up policy engine singleton on startup
+    logger.info("[5/5] Policy engine initialized ✅")
 
 
 

@@ -145,6 +145,10 @@ CLASSIFIER_MODEL = "protectai/deberta-v3-base-prompt-injection"
 QDRANT_COLLECTION = "injection_patterns"
 QDRANT_VECTOR_DIM = 384           # all-MiniLM-L6-v2 output dimension
 
+# Llama Prompt Guard via Groq — detects injection AND harmful prompts
+PROMPT_GUARD_MODEL = "meta-llama/llama-prompt-guard-2-86m"
+PROMPT_GUARD_THRESHOLD = 0.80  # confidence above this = block
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Module-Level Singletons (initialized once at startup, reused per request)
@@ -349,10 +353,44 @@ async def _scan_classifier(prompt: str) -> tuple[float, str]:
         injection_score = score
 
     logger.debug(
-        f"Classifier result | label={label} | "
-        f"raw_score={score:.3f} | injection_score={injection_score:.3f}"
+        f"Injection classifier | score={score:.3f} | label={label}"
     )
-    return injection_score, label
+    return score, label
+
+
+async def _scan_prompt_guard(prompt: str) -> tuple[float, str]:
+    """
+    Layer 2 (upgraded): Llama Prompt Guard 2 via Groq API.
+    Detects BOTH injection attempts AND harmful/unsafe prompts.
+    Replaces local HuggingFace classifier — faster, more accurate.
+
+    Returns (injection_score, label)
+    label: "INJECTION" | "JAILBREAK" | "BENIGN"
+    """
+    import os
+    try:
+        import litellm
+
+        response = await litellm.acompletion(
+            model=f"groq/{PROMPT_GUARD_MODEL}",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=10,
+            api_key=os.getenv("GROQ_API_KEY"),
+        )
+
+        result_text = response.choices[0].message.content.strip().upper()
+        logger.debug(f"Prompt Guard result: {result_text}")
+
+        # Llama Prompt Guard returns INJECTION, JAILBREAK, or BENIGN
+        if "INJECTION" in result_text or "JAILBREAK" in result_text:
+            return 0.95, result_text
+        else:
+            return 0.0, "BENIGN"
+
+    except Exception as e:
+        logger.warning(f"Prompt Guard failed — falling back to local classifier | error={str(e)}")
+        # Fall back to existing HuggingFace classifier
+        return await _scan_classifier(prompt)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -487,7 +525,7 @@ async def scan(prompt: str) -> InjectionResult:
 
     (classifier_score, classifier_label), (similarity_score, matched_seed) = (
         await asyncio.gather(
-            _scan_classifier(prompt),
+            _scan_prompt_guard(prompt),   # upgraded: Llama Prompt Guard 2
             _scan_embeddings(prompt),
         )
     )

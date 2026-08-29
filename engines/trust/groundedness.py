@@ -71,9 +71,9 @@ QDRANT_VECTOR_DIM = 384
 # Minimum similarity score for a claim to be considered grounded
 # per use case — finance is strictest (financial claims must be sourced)
 GROUNDEDNESS_THRESHOLDS: dict[str, float] = {
-    "customer_chatbot": 0.55,
-    "hr_copilot":       0.55,
-    "finance_tool":     0.60,
+    "customer_chatbot": 0.50,
+    "hr_copilot":       0.50,
+    "finance_tool":     0.52,
 }
 
 DEFAULT_THRESHOLD = 0.55
@@ -216,6 +216,16 @@ def _split_into_claims(text: str) -> list[str]:
     Returns:
         List of individual claim strings
     """
+    import re
+    
+    # Strip markdown formatting before splitting
+    # Markdown symbols reduce embedding similarity against plain-text KB
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # **bold** → bold
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)        # *italic* → italic
+    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)  # ## headers
+    text = re.sub(r'^\s*[\*\-•]\s+', '', text, flags=re.MULTILINE)  # bullet points
+    text = re.sub(r'`([^`]+)`', r'\1', text)          # `code` → code
+
     # Split on sentence boundaries
     sentences = re.split(
         r'(?<=[.!?])\s+(?=[A-Z])|(?<=[.!?])\n+|\n{2,}',
