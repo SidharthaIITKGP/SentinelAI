@@ -53,6 +53,7 @@ class BiasType(str, Enum):
 
 
 class ProtectedDimension(str, Enum):
+    """Protected demographic dimensions for bias detection."""
     GENDER = "GENDER"
     RACE_ETHNICITY = "RACE_ETHNICITY"
     AGE = "AGE"
@@ -65,6 +66,7 @@ class ProtectedDimension(str, Enum):
 
 
 class BiasBehavior(str, Enum):
+    """Types of biased behavior the bias detector can identify."""
     STEREOTYPING = "STEREOTYPING"
     DIFFERENTIAL_TREATMENT = "DIFFERENTIAL_TREATMENT"
     EXCLUSION = "EXCLUSION"
@@ -153,8 +155,14 @@ class PIIEntity(BaseModel):
     end: int = Field(..., description="Character position where it ends")
     score: float = Field(..., ge=0.0, le=1.0, description="Presidio's confidence score")
     redacted_placeholder: str = Field(..., description="What it gets replaced with e.g. '<PERSON>'")
-    detection_method: str = Field(default="MODEL_NER", description="MODEL_NER | DICTIONARY | ALIAS")
-    signals: List[str] = Field(default_factory=list, description="Safe evidence labels only")
+    detection_method: str = Field(
+        default="PATTERN_VALIDATED",
+        description="How this entity was detected: MODEL_NER | PATTERN_VALIDATED | DICTIONARY | ALIAS"
+    )
+    signals: List[str] = Field(
+        default_factory=list,
+        description="Additional detection signals"
+    )
 
 
 class FlaggedClaim(BaseModel):
@@ -215,37 +223,37 @@ class PolicyDecision(BaseModel):
     )
     policy_rule_ids: List[str] = Field(
         default_factory=list,
-        description="Safe identifiers for the policy rules that determined the action",
+        description="Which policy rules triggered this decision"
     )
 
 
 class PolicyEvaluationRequest(BaseModel):
-    """Safe inputs for independently evaluating the Phase 4 policy configuration."""
+    """Input to the policy engine for response-side evaluation."""
     model_config = ConfigDict(use_enum_values=True)
 
     use_case: UseCase
     risk_score: float = Field(..., ge=0.0, le=1.0)
-    pii_detected: bool = False
-    secrets_detected: bool = False
-    confidential_detected: bool = False
-    bias_detected: bool = False
-    proposed_action: ActionType = ActionType.ALLOW
+    proposed_action: ActionType = Field(default=ActionType.ALLOW)
+    pii_detected: bool = Field(default=False)
+    bias_detected: bool = Field(default=False)
+    secrets_detected: bool = Field(default=False)
+    confidential_detected: bool = Field(default=False)
 
 
 class InterceptPolicyRequest(BaseModel):
-    """Safe, aggregate detector evidence used by the simulated intercept policy."""
+    """Input to the policy engine for prompt-side intercept evaluation."""
     model_config = ConfigDict(use_enum_values=True)
 
-    use_case: UseCase = UseCase.CUSTOMER_CHATBOT
-    scan_target: str = Field(..., pattern="^external_llm$")
-    risk_score: float = Field(..., ge=0.0, le=1.0)
-    pii_detected: bool = False
-    secret_detected: bool = False
-    confidential_detected: bool = False
-    known_high_confidence_secret: bool = False
-    possible_secret: bool = False
-    signal_count: int = Field(default=0, ge=0)
-    proposed_action: ActionType = ActionType.ALLOW
+    use_case: UseCase
+    scan_target: str = Field(default="external_llm")
+    risk_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    proposed_action: ActionType = Field(default=ActionType.ALLOW)
+    pii_detected: bool = Field(default=False)
+    known_high_confidence_secret: bool = Field(default=False)
+    possible_secret: bool = Field(default=False)
+    secret_detected: bool = Field(default=False)
+    confidential_detected: bool = Field(default=False)
+    signal_count: int = Field(default=0)
 
 
 class RiskBreakdown(BaseModel):
@@ -506,33 +514,56 @@ class BiasResult(BaseModel):
 
     detected: bool = Field(..., description="Was bias found?")
     score: float = Field(default=0.0, ge=0.0, le=1.0, description="Deprecated alias for risk_score")
-    risk_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Aggregated bias severity")
-    protected_dimensions: List[ProtectedDimension] = Field(default_factory=list)
-    behaviors: List[BiasBehavior] = Field(default_factory=list)
-    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="Safe signal metadata")
-    toxicity_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    identity_hate_score: float = Field(default=0.0, ge=0.0, le=1.0)
-    bias_types: List[BiasType] = Field(
-        default_factory=list, description="Which categories were detected"
-    )
-    flagged_segments: List[str] = Field(
-        default_factory=list, description="The actual text snippets that were biased"
-    )
-    confidence: float = Field(
-        default=0.0, ge=0.0, le=1.0,
-        description="Detector's confidence in its own finding"
-    )
     detection_method: str = Field(
         default="pattern_match",
         description="'classifier' | 'pattern_match' | 'both'"
     )
+    protected_dimensions: List[ProtectedDimension] = Field(
+        default_factory=list,
+        description="Protected demographic dimensions where bias was detected"
+    )
+    behaviors: List[BiasBehavior] = Field(
+        default_factory=list,
+        description="Types of biased behaviors detected"
+    )
+    evidence: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Detailed evidence from each detection layer"
+    )
+    toxicity_score: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Raw toxicity classifier score"
+    )
+    identity_hate_score: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Raw identity hate classifier score"
+    )
+    risk_score: float = Field(
+        default=0.0, ge=0.0, le=1.0,
+        description="Aggregated risk score from all bias signals"
+    )
+    bias_types: List[BiasType] = Field(
+        default_factory=list,
+        description="Which categories were detected"
+    )
+    flagged_segments: List[str] = Field(
+        default_factory=list,
+        description="The actual text snippets that were biased"
+    )
 
     @model_validator(mode="after")
     def validate_consistency(self):
-        """If not detected, bias_types and flagged_segments must be empty."""
+        """If not detected, clear all bias signal fields."""
         if not self.detected:
             self.bias_types = []
             self.flagged_segments = []
+            self.protected_dimensions = []
+            self.behaviors = []
+            self.evidence = []
+            self.score = 0.0
+            self.risk_score = 0.0
+            self.toxicity_score = 0.0
+            self.identity_hate_score = 0.0
         return self
 
 
@@ -973,7 +1004,7 @@ ALL_SCHEMAS = [
     "ConfidentialCategory",
     # Sub-models
     "PIIEntity", "FlaggedClaim", "SupportingSource", "ModelConfig",
-    "PolicyDecision", "RiskBreakdown",
+    "PolicyDecision", "PolicyEvaluationRequest", "InterceptPolicyRequest", "RiskBreakdown",
     # Engine Results
     "InjectionResult", "PIIResult", "PiiTextRequest", "PiiScanResponse",
     "PiiAnonymizeResponse", "SecretFinding", "SecretResult", "SecretTextRequest",

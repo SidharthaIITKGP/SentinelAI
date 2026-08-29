@@ -545,7 +545,13 @@ async def run_pipeline(
     # Policy evaluation (Aman's OPA module)
     # REAL (Day 3): policy_decision = await evaluate_policy(request.use_case, risk_score)
     if evaluate_policy is not None:
-        policy_decision = await evaluate_policy(request.use_case, risk_score)
+        policy_decision = await evaluate_policy(
+            use_case=request.use_case,
+            risk_score=risk_score,
+            pii_detected=pii_response_result.found,
+            bias_detected=bias_result.detected,
+            secrets_detected=False,
+        )
     else:
         policy_decision = _mock_policy_decision()
         logger.debug(f"[{request_id}] evaluate_policy stubbed — Aman's module")
