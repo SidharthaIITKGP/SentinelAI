@@ -39,15 +39,15 @@ async def lifespan(app: FastAPI):
 
     # Step 1 — Load knowledge base
     logger.info("[1/5] Loading knowledge base from sample_docs.json...")
-    # TODO: from engines.trust.groundedness import initialize_knowledge_base
-    # TODO: await initialize_knowledge_base("engines/trust/knowledge_base/sample_docs.json")
-    logger.info("[1/5] Knowledge base loading — STUBBED (implement Day 2)")
+    from engines.trust.groundedness import initialize_knowledge_base
+    await initialize_knowledge_base()
+    logger.info("[1/5] Knowledge base loaded ✅")
 
-    # Step 2 — Connect to Qdrant
-    logger.info("[2/5] Connecting to Qdrant vector store...")
-    # TODO: initialize qdrant client
-    # TODO: create collections if they don't exist: "knowledge_base", "injection_patterns"
-    logger.info("[2/5] Qdrant connection — STUBBED (implement Day 2)")
+    # Step 2 — Initialize injection detector
+    logger.info("[2/5] Initializing injection detector...")
+    from core.injection_detector import init_injection_detector
+    await init_injection_detector()
+    logger.info("[2/5] Injection detector initialized ✅")
 
     # Step 3 — Connect to PostgreSQL
     logger.info("[3/5] Connecting to PostgreSQL...")
@@ -66,6 +66,8 @@ async def lifespan(app: FastAPI):
     # TODO: from policy.engine import init_policy_engine
     # TODO: await init_policy_engine()
     logger.info("[5/5] OPA policy engine — STUBBED (implement Day 3 — Aman's module)")
+
+
 
     logger.info("=" * 50)
     logger.info("SentinelAI startup complete. Server ready.")

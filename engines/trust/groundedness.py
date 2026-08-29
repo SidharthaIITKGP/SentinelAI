@@ -237,6 +237,31 @@ def _split_into_claims(text: str) -> list[str]:
     if not claims:
         claims = [text.strip()]
 
+    # Filter out meta-statements and refusals
+    # These are not factual claims — no point checking groundedness
+    NON_FACTUAL_PREFIXES = [
+        "i am an", "i'm an", "i cannot", "i can't",
+        "i do not have", "i don't have", "i am unable",
+        "i'm unable", "my knowledge", "my role",
+        "please contact", "please consult", "please refer",
+        "for more information", "i would recommend",
+        "i am not able", "i'm not able",
+        "as an hr", "as a finance", "as a customer",
+    ]
+
+    filtered_claims = []
+    for claim in claims:
+        claim_lower = claim.lower()
+        is_non_factual = any(
+            claim_lower.startswith(prefix)
+            for prefix in NON_FACTUAL_PREFIXES
+        )
+        if not is_non_factual:
+            filtered_claims.append(claim)
+
+    # If all claims filtered out → nothing to check → return grounded
+    claims = filtered_claims if filtered_claims else []
+
     logger.debug(f"Split response into {len(claims)} claims")
     return claims
 
@@ -385,13 +410,13 @@ async def _check_single_claim(
 
     # Stage 2 — Number mismatch detection
     # Topic is covered — now check if numbers agree
-    claim_numbers = _extract_numbers(claim)
+    claim_numbers  = _extract_numbers(claim)
     source_numbers = _extract_numbers(best["content"])
 
     if claim_numbers and source_numbers:
         # Both have numbers — check for mismatch
         # A mismatch is when claim numbers don't appear in source numbers at all
-        claim_set = set(claim_numbers)
+        claim_set  = set(claim_numbers)
         source_set = set(source_numbers)
 
         # Check if ANY claim number is in the source
@@ -410,6 +435,32 @@ async def _check_single_claim(
             )
             # Topic matched but numbers wrong — hallucination
             return False, best_score, best
+
+    # Stage 3 — Contradiction keyword detection
+    # Catches hallucinations like "unlimited" when source says "10 days"
+    # These words directly contradict specific bounded policies in our KB
+    CONTRADICTION_KEYWORDS = [
+        "unlimited", "no limit", "no cap", "no maximum",
+        "as many as you need", "as needed", "indefinite",
+        "no restriction", "unrestricted", "without limit",
+    ]
+    claim_lower = claim.lower()
+
+    # If claim contains contradiction keyword AND source contains specific numbers
+    # → claim is contradicting the policy → hallucination
+    claim_has_contradiction = any(
+        kw in claim_lower for kw in CONTRADICTION_KEYWORDS
+    )
+    source_has_specific_limit = bool(source_numbers)
+
+    if claim_has_contradiction and source_has_specific_limit:
+        logger.info(
+            f"CONTRADICTION detected | "
+            f"claim contains unlimited-type keyword but source has specific limit | "
+            f"source_numbers={source_numbers} | "
+            f"claim={claim[:60]}"
+        )
+        return False, best_score, best
 
     # Both checks passed — claim is grounded
     logger.debug(
