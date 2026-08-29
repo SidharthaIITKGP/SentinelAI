@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.routes.responsibility import router as responsibility_router
 from api.schemas import HealthResponse
 
 # ── Logging ────────────────────────────────────────────────────────────────────
@@ -107,6 +108,8 @@ app.add_middleware(
 
 # ── Route registration ────────────────────────────────────────────────────────
 # Wrapped in try/except so the server starts even if route files aren't built yet
+
+app.include_router(responsibility_router)
 
 try:
     from api.routes import intercept

@@ -1,0 +1,38 @@
+version: 1
+# Phase 4 policy. Values are intentionally explicit and reviewable.
+# Risk boundaries are inclusive: a score equal to a threshold triggers its action.
+use_cases:
+  customer_chatbot:
+    block_at: 0.75
+    escalate_at: 0.60
+    sensitive_data_action: REDACT
+    confidential_action: ESCALATE
+    bias_action: ESCALATE
+  hr_copilot:
+    block_at: 0.85
+    escalate_at: 0.75
+    sensitive_data_action: REDACT
+    confidential_action: ESCALATE
+    bias_action: ESCALATE
+  finance_tool:
+    block_at: 0.70
+    escalate_at: 0.55
+    sensitive_data_action: REDACT
+    confidential_action: ESCALATE
+    bias_action: ESCALATE
+
+# Rules for the simulated no-LLM intercept pipeline. These rules are evaluated
+# before use-case score thresholds so a high-severity PII format can be
+# redacted for an external target instead of automatically being blocked.
+intercept:
+  risk_aggregation:
+    multi_signal_increment: 0.10
+  targets:
+    external_llm:
+      known_secret_action: BLOCK
+      possible_secret_action: ESCALATE
+      generic_secret_action: REDACT
+      pii_action: REDACT
+      confidential_action: ESCALATE
+      multi_signal_action: ESCALATE
+      multi_signal_minimum: 2
