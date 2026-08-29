@@ -7,16 +7,19 @@ use_cases:
     escalate_at: 0.60
     sensitive_data_action: REDACT
     confidential_action: ESCALATE
+    bias_action: ESCALATE
   hr_copilot:
     block_at: 0.85
     escalate_at: 0.75
     sensitive_data_action: REDACT
     confidential_action: ESCALATE
+    bias_action: ESCALATE
   finance_tool:
     block_at: 0.70
     escalate_at: 0.55
     sensitive_data_action: REDACT
     confidential_action: ESCALATE
+    bias_action: ESCALATE
 
 # Rules for the simulated no-LLM intercept pipeline. These rules are evaluated
 # before use-case score thresholds so a high-severity PII format can be

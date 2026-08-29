@@ -50,7 +50,7 @@ class PolicyEngine:
                 raise PolicyConfigurationError(f"Policy thresholds for {name} are invalid") from exc
             if not 0.0 <= escalate_at <= block_at <= 1.0:
                 raise PolicyConfigurationError(f"Policy thresholds for {name} are invalid")
-            for action_key in ("sensitive_data_action", "confidential_action"):
+            for action_key in ("sensitive_data_action", "confidential_action", "bias_action"):
                 try:
                     ActionType(rules[action_key])
                 except (KeyError, ValueError) as exc:
@@ -109,6 +109,11 @@ class PolicyEngine:
                 ActionType(rules["confidential_action"]),
                 0.0,
                 "Confidential-information detector signal requires the configured action.",
+            )
+        elif request.bias_detected:
+            action, threshold, reason = (
+                ActionType(rules["bias_action"]), 0.0,
+                "Bias detector signal requires the configured review action.",
             )
         else:
             action, threshold, reason = (

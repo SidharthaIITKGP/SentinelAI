@@ -52,6 +52,47 @@ class BiasType(str, Enum):
     GENERAL_TOXICITY = "general_toxicity"
 
 
+class ProtectedDimension(str, Enum):
+    GENDER = "GENDER"
+    RACE_ETHNICITY = "RACE_ETHNICITY"
+    AGE = "AGE"
+    RELIGION = "RELIGION"
+    DISABILITY = "DISABILITY"
+    NATIONALITY = "NATIONALITY"
+    SOCIOECONOMIC_STATUS = "SOCIOECONOMIC_STATUS"
+    SEXUAL_ORIENTATION = "SEXUAL_ORIENTATION"
+    MARITAL_FAMILY_STATUS = "MARITAL_FAMILY_STATUS"
+
+
+class BiasBehavior(str, Enum):
+    STEREOTYPING = "STEREOTYPING"
+    DIFFERENTIAL_TREATMENT = "DIFFERENTIAL_TREATMENT"
+    EXCLUSION = "EXCLUSION"
+    DEMOGRAPHIC_ASSUMPTION = "DEMOGRAPHIC_ASSUMPTION"
+    DEROGATORY_GENERALIZATION = "DEROGATORY_GENERALIZATION"
+
+
+class LLMBiasJudgment(BaseModel):
+    """Strict evidence-only contract returned by an optional LLM bias judge."""
+    model_config = ConfigDict(use_enum_values=True, extra="forbid")
+
+    endorses_bias: bool
+    protected_dimensions: List[ProtectedDimension] = Field(default_factory=list)
+    behaviors: List[BiasBehavior] = Field(default_factory=list)
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_bias_evidence(self):
+        if self.endorses_bias and not self.protected_dimensions:
+            raise ValueError("endorsed bias requires a protected dimension")
+        if self.endorses_bias and not self.behaviors:
+            raise ValueError("endorsed bias requires a behavior")
+        if not self.endorses_bias:
+            self.protected_dimensions = []
+            self.behaviors = []
+        return self
+
+
 class PIIEntityType(str, Enum):
     """Types of PII entities Presidio can detect. These are the ones we care about."""
     PERSON = "PERSON"
@@ -187,6 +228,7 @@ class PolicyEvaluationRequest(BaseModel):
     pii_detected: bool = False
     secrets_detected: bool = False
     confidential_detected: bool = False
+    bias_detected: bool = False
     proposed_action: ActionType = ActionType.ALLOW
 
 
@@ -459,11 +501,17 @@ class SimulatedInterceptResponse(BaseModel):
 
 
 class BiasResult(BaseModel):
-    """Return type of engines/responsibility/bias_detector.py"""
+    """Return type of engines/responsibility/bias_check/bias_detector.py"""
     model_config = ConfigDict(use_enum_values=True)
 
     detected: bool = Field(..., description="Was bias found?")
-    score: float = Field(default=0.0, ge=0.0, le=1.0, description="Severity")
+    score: float = Field(default=0.0, ge=0.0, le=1.0, description="Deprecated alias for risk_score")
+    risk_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Aggregated bias severity")
+    protected_dimensions: List[ProtectedDimension] = Field(default_factory=list)
+    behaviors: List[BiasBehavior] = Field(default_factory=list)
+    evidence: List[Dict[str, Any]] = Field(default_factory=list, description="Safe signal metadata")
+    toxicity_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    identity_hate_score: float = Field(default=0.0, ge=0.0, le=1.0)
     bias_types: List[BiasType] = Field(
         default_factory=list, description="Which categories were detected"
     )
@@ -486,6 +534,24 @@ class BiasResult(BaseModel):
             self.bias_types = []
             self.flagged_segments = []
         return self
+
+
+class BiasTextRequest(BaseModel):
+    """Text from an LLM response to inspect for biased assertions."""
+    text: str = Field(..., min_length=1, max_length=10000)
+    scan_target: str = Field(default="response", pattern="^response$")
+
+
+class BiasScanResponse(BaseModel):
+    detected: bool
+    risk_score: float = Field(ge=0.0, le=1.0)
+    protected_dimensions: List[ProtectedDimension] = Field(default_factory=list)
+    behaviors: List[BiasBehavior] = Field(default_factory=list)
+    evidence: List[Dict[str, Any]] = Field(default_factory=list)
+    toxicity_score: float = Field(ge=0.0, le=1.0)
+    identity_hate_score: float = Field(ge=0.0, le=1.0)
+    detection_method: str
+    scan_target: str
 
 
 class GroundednessResult(BaseModel):
@@ -903,7 +969,7 @@ class HealthResponse(BaseModel):
 
 ALL_SCHEMAS = [
     # Enums
-    "UseCase", "RiskLevel", "ActionType", "BiasType", "PIIEntityType", "SecretType",
+    "UseCase", "RiskLevel", "ActionType", "BiasType", "ProtectedDimension", "BiasBehavior", "LLMBiasJudgment", "PIIEntityType", "SecretType",
     "ConfidentialCategory",
     # Sub-models
     "PIIEntity", "FlaggedClaim", "SupportingSource", "ModelConfig",
@@ -911,7 +977,7 @@ ALL_SCHEMAS = [
     # Engine Results
     "InjectionResult", "PIIResult", "PiiTextRequest", "PiiScanResponse",
     "PiiAnonymizeResponse", "SecretFinding", "SecretResult", "SecretTextRequest",
-    "SecretScanResponse", "SecretAnonymizeResponse", "BiasResult", "GroundednessResult",
+    "SecretScanResponse", "SecretAnonymizeResponse", "BiasResult", "BiasTextRequest", "BiasScanResponse", "GroundednessResult",
     "ConfidentialFinding", "ConfidentialResult", "ConfidentialTextRequest",
     "ConfidentialScanResponse", "ConfidentialAnonymizeResponse",
     # Core Pipeline

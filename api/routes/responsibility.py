@@ -9,6 +9,11 @@ from api.schemas import (
     ConfidentialAnonymizeResponse, ConfidentialScanResponse, ConfidentialTextRequest,
     PolicyDecision, PolicyEvaluationRequest,
     SimulatedInterceptRequest, SimulatedInterceptResponse,
+    BiasTextRequest, BiasScanResponse,
+)
+from engines.responsibility.bias_check.bias_detector import (
+    BiasDetectorError,
+    get_bias_detector,
 )
 from engines.responsibility.pii_check.confidential_detector import (
     ConfidentialDetectorError, get_confidential_detector,
@@ -54,6 +59,21 @@ def _confidential_scan_response(result) -> dict:
         "finding_count": result.finding_count,
         "scan_target": result.scan_target,
     }
+
+
+@router.post("/bias/scan", response_model=BiasScanResponse)
+async def scan_bias(request: BiasTextRequest) -> dict:
+    """Inspect an LLM response for evidence of endorsed discriminatory bias."""
+    try:
+        result = get_bias_detector().scan(request.text, scan_target=request.scan_target)
+        return {"detected": result.detected, "risk_score": result.risk_score,
+                "protected_dimensions": result.protected_dimensions, "behaviors": result.behaviors,
+                "evidence": result.evidence, "toxicity_score": result.toxicity_score,
+                "identity_hate_score": result.identity_hate_score,
+                "detection_method": result.detection_method, "scan_target": request.scan_target}
+    except (BiasDetectorError, ValueError):
+        logger.error("Bias scan request failed")
+        raise HTTPException(status_code=503, detail="Bias scanning service is unavailable") from None
 
 
 @router.post("/scan", response_model=PiiScanResponse)
