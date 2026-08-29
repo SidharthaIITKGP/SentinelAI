@@ -1,0 +1,86 @@
+"""
+SentinelAI — POST /intercept route (Gaurav's module)
+
+Wires the incoming HTTP request through the existing core.pipeline.run_pipeline()
+and persists the audit entry.
+
+CRITICAL FIXES applied:
+  FIX #1: use action_result.action     (not .action_taken)
+  FIX #2: use audit_entry.risk_score.overall (not .score)
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+
+from fastapi import APIRouter, HTTPException
+
+from api.schemas import InterceptRequest, InterceptResponse
+from core.pipeline import run_pipeline
+from data.audit_logger import log_request
+
+logger = logging.getLogger("sentinelai.intercept")
+
+router = APIRouter()
+
+
+@router.post(
+    "/intercept",
+    response_model=InterceptResponse,
+    summary="Govern an LLM request",
+    description=(
+        "Intercepts an incoming LLM prompt, runs the 5-step SentinelAI "
+        "governance pipeline, persists the audit entry, and returns the "
+        "governed response."
+    ),
+)
+async def intercept(request: InterceptRequest) -> InterceptResponse:
+    """
+    POST /intercept
+
+    Flow:
+      1. Receive InterceptRequest
+      2. Call core.pipeline.run_pipeline() → (ActionResult, AuditEntry)
+      3. Persist AuditEntry via data.audit_logger.log_request()
+      4. Return InterceptResponse with request_id, action, risk info, latency
+    """
+    wall_start = time.time()
+
+    try:
+        # Step 2 — run the full governance pipeline
+        action_result, audit_entry = await run_pipeline(request)
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
+
+    # Step 3 — persist audit entry (non-blocking already inside pipeline,
+    # but we also await here to get the request_id back for the response)
+    try:
+        request_id = await log_request(audit_entry)
+    except Exception as e:
+        logger.warning(f"Audit log failed (non-fatal): {e}")
+        request_id = audit_entry.request_id
+
+    # Total wall-clock latency (includes audit write)
+    total_latency_ms = max(1, int((time.time() - wall_start) * 1000))
+
+    # FIX #1: action_result.action  (not .action_taken)
+    action_taken = action_result.action
+
+    # FIX #2: audit_entry.risk_score.overall  (not .score)
+    risk_score_value = audit_entry.risk_score.overall
+    risk_level_value = audit_entry.risk_score.level
+
+    # Step 4 — build and return the governed response
+    return InterceptResponse(
+        request_id=request_id,
+        final_response=action_result.final_response,
+        action_taken=action_taken,
+        risk_level=risk_level_value,
+        risk_score=risk_score_value,
+        latency_ms=audit_entry.latency_ms or total_latency_ms,
+        evidence=action_result.evidence,
+        governed=True,
+        escalation_required=action_result.escalation_required,
+    )

@@ -1,0 +1,112 @@
+# SentinelAI — Docker Compose
+# Run the complete system with: docker-compose up
+#
+# Services:
+#   postgres  — PostgreSQL database
+#   qdrant    — Vector database (trust/groundedness engine)
+#   redis     — Cache layer
+#   api       — FastAPI backend (SentinelAI)
+#   dashboard — React frontend
+
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: sentinelai-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentinelai
+      POSTGRES_USER: sentinelai
+      POSTGRES_PASSWORD: sentinelai
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./data/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinelai -d sentinelai"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Qdrant (Vector DB) ──────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: sentinelai-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", "curl -sf http://localhost:6333/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis ───────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: sentinelai-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── FastAPI Backend ─────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: sentinelai-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # FIX #7: GROQ_API_KEY (not OPENAI_API_KEY)
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      DATABASE_URL: postgresql://sentinelai:sentinelai@postgres:5432/sentinelai
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      REDIS_URL: redis://redis:6379/0
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: uvicorn core.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ── React Dashboard ─────────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile.dashboard
+    container_name: sentinelai-dashboard
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    environment:
+      VITE_API_URL: http://api:8000
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  redis_data:

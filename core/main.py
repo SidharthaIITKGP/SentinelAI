@@ -38,35 +38,51 @@ async def lifespan(app: FastAPI):
     logger.info("SentinelAI starting up...")
     logger.info("=" * 50)
 
-    # Step 1 — Load knowledge base
+    # Step 1 — Load knowledge base (requires Qdrant)
     logger.info("[1/5] Loading knowledge base from sample_docs.json...")
-    from engines.trust.groundedness import initialize_knowledge_base
-    await initialize_knowledge_base()
-    logger.info("[1/5] Knowledge base loaded ✅")
+    try:
+        from engines.trust.groundedness import initialize_knowledge_base
+        await initialize_knowledge_base()
+        logger.info("[1/5] Knowledge base loaded ✅")
+    except Exception as exc:
+        logger.warning(f"[1/5] Knowledge base / Qdrant unavailable (non-fatal): {exc}")
+        logger.warning("[1/5] Groundedness checks will be skipped until Qdrant is reachable.")
 
     # Step 2 — Initialize injection detector
     logger.info("[2/5] Initializing injection detector...")
-    from core.injection_detector import init_injection_detector
-    await init_injection_detector()
-    logger.info("[2/5] Injection detector initialized ✅")
+    try:
+        from core.injection_detector import init_injection_detector
+        await init_injection_detector()
+        logger.info("[2/5] Injection detector initialized ✅")
+    except Exception as exc:
+        logger.warning(f"[2/5] Injection detector init failed (non-fatal): {exc}")
 
     # Step 3 — Connect to PostgreSQL
     logger.info("[3/5] Connecting to PostgreSQL...")
-    # TODO: from data.audit_logger import init_db
-    # TODO: await init_db()
-    logger.info("[3/5] PostgreSQL connection — STUBBED (implement Day 3)")
+    try:
+        from data.audit_logger import init_db
+        await init_db()
+        logger.info("[3/5] PostgreSQL connected ✅")
+    except Exception as exc:
+        logger.warning(f"[3/5] PostgreSQL connection failed (non-fatal): {exc}")
 
     # Step 4 — Initialize Presidio PII analyzer
     logger.info("[4/5] Initializing Presidio PII analyzer...")
-    from engines.responsibility.pii_check.pii_detector import get_pii_detector
-    get_pii_detector()  # warms up Presidio singleton on startup
-    logger.info("[4/5] Presidio initialized ✅")
+    try:
+        from engines.responsibility.pii_check.pii_detector import get_pii_detector
+        get_pii_detector()  # warms up Presidio singleton on startup
+        logger.info("[4/5] Presidio initialized ✅")
+    except Exception as exc:
+        logger.warning(f"[4/5] Presidio PII analyzer init failed (non-fatal): {exc}")
 
     # Step 5 — Initialize Policy Engine
     logger.info("[5/5] Loading policy engine...")
-    from engines.responsibility.pii_check.policy.engine import get_policy_engine
-    get_policy_engine()  # warms up policy engine singleton on startup
-    logger.info("[5/5] Policy engine initialized ✅")
+    try:
+        from engines.responsibility.pii_check.policy.engine import get_policy_engine
+        get_policy_engine()  # warms up policy engine singleton on startup
+        logger.info("[5/5] Policy engine initialized ✅")
+    except Exception as exc:
+        logger.warning(f"[5/5] Policy engine init failed (non-fatal): {exc}")
 
 
 
@@ -78,8 +94,11 @@ async def lifespan(app: FastAPI):
 
     # ── SHUTDOWN ───────────────────────────────────────────────────────────
     logger.info("SentinelAI shutting down...")
-    # TODO: close database connections
-    # TODO: close Qdrant client
+    try:
+        from data.audit_logger import close_db
+        await close_db()
+    except Exception:
+        pass
     logger.info("Shutdown complete.")
 
 
