@@ -107,32 +107,115 @@ except ImportError:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
-async def _call_llm(prompt: str, model_config) -> tuple[str, int, int]:
+async def _call_llm(prompt: str, model_config, use_case: str = "hr_copilot") -> tuple[str, int, int]:
     """
-    Calls the LLM and returns (response_text, tokens_input, tokens_output).
-    STUBBED — replace with real LiteLLM call on Day 3.
+    Calls the LLM via Groq using LiteLLM.
+    Returns (response_text, tokens_input, tokens_output).
 
-    Real implementation:
-        import litellm
-        response = await litellm.acompletion(
-            model=model_config.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=model_config.max_tokens,
-            temperature=model_config.temperature
-        )
-        return (
-            response.choices[0].message.content,
-            response.usage.prompt_tokens,
-            response.usage.completion_tokens,
-        )
+    Model selected by model_router based on risk level + use case.
+    Default: groq/qwen/qwen3.8-27b (2M tokens/day free tier — no limit risk)
+
+    Args:
+        prompt:       User prompt to send to LLM
+        model_config: ModelConfig object or dict with model, max_tokens, temperature
+
+    Returns:
+        tuple of (response_text, tokens_input, tokens_output)
     """
-    # STUB — returns mock response
-    logger.debug("LLM call stubbed — returning mock response")
-    mock_response = (
-        f"This is a mock LLM response for prompt: '{prompt[:50]}...'. "
-        f"Real LiteLLM integration pending Day 3."
+    import litellm
+    import os
+
+    # Extract config — handle both ModelConfig object and plain dict
+    if isinstance(model_config, dict):
+        model       = model_config.get("model", "groq/qwen/qwen3.8-27b")
+        max_tokens  = model_config.get("max_tokens", 500)
+        temperature = model_config.get("temperature", 0.3)
+    else:
+        model       = getattr(model_config, "model", "groq/qwen/qwen3.8-27b")
+        max_tokens  = getattr(model_config, "max_tokens", 500)
+        temperature = getattr(model_config, "temperature", 0.3)
+
+    # Ensure Groq provider prefix
+    if not model.startswith("groq/"):
+        model = f"groq/{model}"
+
+    logger.info(
+        f"Calling LLM | model={model} | "
+        f"max_tokens={max_tokens} | temperature={temperature}"
     )
-    return mock_response, len(prompt.split()), 50
+
+    try:
+        # Use-case-specific system prompts with hard-coded Acme Corp facts.
+        # Each prompt tells the LLM exactly what role it plays and what data it has.
+        SYSTEM_PROMPTS = {
+            "customer_chatbot": (
+                "You are Acme Corp's customer support assistant. "
+                "You have full knowledge of Acme Corp's policies: "
+                "30-day return window, free shipping on orders over $50, "
+                "express shipping $12.99 (2-3 days), standard shipping 5-7 days, "
+                "1-year warranty on electronics, 90-day warranty on accessories, "
+                "support hours Monday-Friday 9am-6pm EST. "
+                "Answer customer questions directly and specifically using these facts. "
+                "Be concise. Do not say you lack access to information."
+            ),
+            "hr_copilot": (
+                "You are Acme Corp's internal HR assistant. "
+                "You have full knowledge of Acme Corp HR policies: "
+                "employees get 10 paid sick days per year, "
+                "15 days annual leave per year (20 days after 5 years), "
+                "remote work up to 3 days per week, "
+                "performance reviews in June and December, "
+                "12 weeks paid parental leave, "
+                "expense reimbursement up to $500 per quarter without approval, "
+                "health insurance with 80% premium covered, 401k match up to 4%. "
+                "Answer employee questions directly using these specific Acme Corp facts. "
+                "Always state the exact number or policy. Do not hedge or say you lack access."
+            ),
+            "finance_tool": (
+                "You are Acme Corp's internal finance assistant. "
+                "You have access to Acme Corp financial data: "
+                "Q1 2026 revenue $4.2M (12% YoY growth), "
+                "Q2 2026 revenue $4.8M (14% YoY growth), "
+                "North America 68% of revenue, Europe 22%, APAC 10%, "
+                "gross margin 62%, EBITDA margin 24%, "
+                "CAC $142, monthly active users 84000, R&D spend 18% of revenue. "
+                "Answer finance questions directly using these specific Acme Corp metrics. "
+                "Always cite the exact figures. Do not hedge or say you lack access."
+            ),
+        }
+
+        system_prompt = SYSTEM_PROMPTS.get(use_case, SYSTEM_PROMPTS["hr_copilot"])
+
+        response = await litellm.acompletion(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature,
+            api_key=os.getenv("GROQ_API_KEY"),
+        )
+
+        response_text = response.choices[0].message.content
+        tokens_input  = response.usage.prompt_tokens
+        tokens_output = response.usage.completion_tokens
+
+        logger.info(
+            f"LLM call complete | model={model} | "
+            f"tokens_in={tokens_input} | tokens_out={tokens_output}"
+        )
+
+        return response_text, tokens_input, tokens_output
+
+    except Exception as e:
+        logger.error(f"LLM call failed | model={model} | error={str(e)}")
+        # Safe fallback — never let LLM failure crash the pipeline
+        fallback = (
+            "I'm unable to process this request at the moment. "
+            "Please try again shortly."
+        )
+        return fallback, 0, 0
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -179,12 +262,12 @@ def _mock_policy_decision() -> PolicyDecision:
 
 
 def _mock_model_config() -> dict:
-    """Mock model config — returns a simple config dict."""
+    """Default model config — Groq Qwen 3.8 27B (2M tokens/day free tier)."""
     return {
-        "model": "gpt-4o-mini",
-        "max_tokens": 500,
+        "model": "groq/qwen/qwen3.8-27b",
+        "max_tokens": 200,
         "temperature": 0.3,
-        "reason": "Model router stubbed — defaulting to gpt-4o-mini",
+        "reason": "Default — Groq Qwen 3.8 27B",
     }
 
 
@@ -217,6 +300,7 @@ async def run_pipeline(
     """
     pipeline_start = time.time()
     request_id = str(uuid.uuid4())
+    use_case_str = request.use_case if isinstance(request.use_case, str) else request.use_case.value
     step_latencies: dict[str, int] = {}
 
     logger.info(
@@ -356,6 +440,7 @@ async def run_pipeline(
     llm_response, tokens_input, tokens_output = await _call_llm(
         prompt=request.prompt,
         model_config=model_config,
+        use_case=use_case_str,
     )
     model_used = (
         model_config["model"]
