@@ -40,24 +40,24 @@ logger = logging.getLogger("sentinelai")
 
 RISK_WEIGHTS: dict[str, dict[str, float]] = {
     "customer_chatbot": {
-        "injection":      0.30,   # injection = immediate trust breach for public users
-        "pii_response":   0.30,   # PII leaking to customer = severe liability
-        "groundedness":   0.20,   # hallucination = bad but recoverable
-        "bias":           0.15,   # bias = reputational risk
-        "pii_prompt":     0.05,   # PII in prompt = lower risk (employee sending it)
+        "injection":      0.30,
+        "pii_response":   0.25,
+        "groundedness":   0.25,
+        "bias":           0.15,
+        "pii_prompt":     0.05,
     },
     "hr_copilot": {
         "injection":      0.20,
-        "pii_response":   0.25,   # employee PII leaking = serious
-        "groundedness":   0.25,   # wrong policy info = employees act on it
-        "bias":           0.25,   # bias in HR = legal liability
+        "pii_response":   0.10,
+        "groundedness":   0.45,
+        "bias":           0.20,
         "pii_prompt":     0.05,
     },
     "finance_tool": {
         "injection":      0.20,
-        "pii_response":   0.20,
-        "groundedness":   0.40,   # financial claims MUST be sourced — highest weight
-        "bias":           0.15,
+        "pii_response":   0.10,
+        "groundedness":   0.55,
+        "bias":           0.10,
         "pii_prompt":     0.05,
     },
 }
@@ -144,9 +144,9 @@ def compute(
 
     # Derive level from overall score
     # Thresholds: HIGH > 0.65, MEDIUM > 0.35, LOW <= 0.35
-    if overall > 0.65:
+    if overall > 0.55:
         level = RiskLevel.HIGH
-    elif overall > 0.35:
+    elif overall > 0.20:
         level = RiskLevel.MEDIUM
     else:
         level = RiskLevel.LOW

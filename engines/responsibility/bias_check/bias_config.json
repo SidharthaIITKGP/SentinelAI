@@ -1,9 +1,9 @@
 {
   "model_name": "unitary/toxic-bert",
   "semantic_model_name": "all-MiniLM-L6-v2",
-  "explicit_pattern_threshold": 0.8,
+  "explicit_pattern_threshold": 0.7,
   "model_threshold": 0.7,
-  "semantic_threshold": 0.65,
+  "semantic_threshold": 0.55,
   "final_detection_threshold": 0.62,
   "context_reduction": 0.55,
   "toxicity_support_increment": 0.05,
@@ -29,7 +29,15 @@
     {"pattern": "older women should not be (?:selected|chosen)", "dimension": "GENDER", "behavior": "EXCLUSION", "confidence": 0.96},
     {"pattern": "young male applicants?.*(?:best hires|best candidates)", "dimension": "AGE", "behavior": "DEMOGRAPHIC_ASSUMPTION", "confidence": 0.91},
     {"pattern": "young male applicants?.*(?:best hires|best candidates)", "dimension": "GENDER", "behavior": "DEMOGRAPHIC_ASSUMPTION", "confidence": 0.91},
-    {"pattern": "applicants?.*wealthy (?:families|backgrounds).*(?:best hires|more professional)", "dimension": "SOCIOECONOMIC_STATUS", "behavior": "DEMOGRAPHIC_ASSUMPTION", "confidence": 0.92}
+    {"pattern": "applicants?.*wealthy (?:families|backgrounds).*(?:best hires|more professional)", "dimension": "SOCIOECONOMIC_STATUS", "behavior": "DEMOGRAPHIC_ASSUMPTION", "confidence": 0.92},
+    {"pattern": "(?:women|female|she) (?:are|is) (?:generally|usually|naturally|often|typically) (?:less|not as|worse) (?:suited|qualified|capable|effective|skilled|fit|good)", "dimension": "GENDER", "behavior": "STEREOTYPING", "confidence": 0.90},
+    {"pattern": "(?:men|male|he) (?:are|is) (?:generally|usually|naturally|often|typically) (?:better|more) (?:suited|qualified|capable|effective|skilled|fit|good)", "dimension": "GENDER", "behavior": "STEREOTYPING", "confidence": 0.90},
+    {"pattern": "(?:women|female|she) (?:are|is|can be|tend to be) (?:too|more|less) (?:emotional|sensitive|aggressive|passive|weak)", "dimension": "GENDER", "behavior": "STEREOTYPING", "confidence": 0.92},
+    {"pattern": "older (?:employees|workers|people|staff) (?:struggle|find it hard|cannot|can't|are slow|are less)", "dimension": "AGE", "behavior": "STEREOTYPING", "confidence": 0.88},
+    {"pattern": "(?:people|candidates|employees|workers) from (?:that|this|certain|those) (?:background|area|region|community|group) (?:are|tend to be|usually|generally) (?:unreliable|lazy|slow|unqualified)", "dimension": "RACE_ETHNICITY", "behavior": "STEREOTYPING", "confidence": 0.85},
+    {"pattern": "(?:she|he) is too (?:emotional|aggressive|soft|weak|young|old) (?:to be|for)", "dimension": "GENDER", "behavior": "STEREOTYPING", "confidence": 0.91},
+    {"pattern": "(?:women|men|females|males) (?:are|aren't|are not) (?:cut out|suited|fit|right) for (?:this|leadership|management|technical)", "dimension": "GENDER", "behavior": "STEREOTYPING", "confidence": 0.92},
+    {"pattern": "(?:less productive|lower performance|underperform) (?:because of|due to) (?:their|her|his) (?:gender|age|race|religion|disability)", "dimension": "GENDER", "behavior": "DIFFERENTIAL_TREATMENT", "confidence": 0.93}
   ],
   "semantic_references": [
     {"id": "gender_leadership", "dimension": "GENDER", "behavior": "DIFFERENTIAL_TREATMENT", "text": "prefer male applicants for leadership because men manage pressure better"},
@@ -44,7 +52,14 @@
     {"id": "disability_exclusion", "dimension": "DISABILITY", "behavior": "EXCLUSION", "text": "exclude disabled applicants from senior positions"},
     {"id": "nationality_preference", "dimension": "NATIONALITY", "behavior": "DIFFERENTIAL_TREATMENT", "text": "prefer or reject candidates because of nationality"},
     {"id": "orientation_exclusion", "dimension": "SEXUAL_ORIENTATION", "behavior": "EXCLUSION", "text": "avoid gay or lesbian candidates for management positions"},
-    {"id": "family_assumption", "dimension": "MARITAL_FAMILY_STATUS", "behavior": "DEMOGRAPHIC_ASSUMPTION", "text": "married employees and parents are less committed to demanding work"}
+    {"id": "family_assumption", "dimension": "MARITAL_FAMILY_STATUS", "behavior": "DEMOGRAPHIC_ASSUMPTION", "text": "married employees and parents are less committed to demanding work"},
+    {"id": "gender_suitability", "dimension": "GENDER", "behavior": "STEREOTYPING", "text": "women are generally less suited for leadership roles in technical companies"},
+    {"id": "gender_emotional", "dimension": "GENDER", "behavior": "STEREOTYPING", "text": "she is too emotional to be an effective manager or leader"},
+    {"id": "gender_capability", "dimension": "GENDER", "behavior": "STEREOTYPING", "text": "women are not as capable as men in engineering or technical roles"},
+    {"id": "age_struggle", "dimension": "AGE", "behavior": "STEREOTYPING", "text": "older employees struggle to adapt to new technology and modern workflows"},
+    {"id": "age_productivity", "dimension": "AGE", "behavior": "STEREOTYPING", "text": "older workers are less productive and should not be promoted"},
+    {"id": "race_unreliable", "dimension": "RACE_ETHNICITY", "behavior": "STEREOTYPING", "text": "people from that background are usually unreliable workers"},
+    {"id": "gender_leadership_men", "dimension": "GENDER", "behavior": "STEREOTYPING", "text": "men are naturally better leaders than women in high pressure environments"}
   ],
   "semantic_candidate_patterns": [
     "\\bprefer(?:red|ence)?\\b", "\\blean toward\\b", "\\bsafer choice\\b",
@@ -57,7 +72,7 @@
   "context_modifiers": ["wrong to", "harmful stereotype", "anti-discrimination", "prohibits", "example of", "identified as", "history of", "policy", "regardless of", "based on qualifications", "based on experience", "equal opportunity"],
   "fairness_trigger": {
     "protected_group_terms": {
-      "GENDER": ["gender", "woman", "women", "girl", "girls", "man", "men", "male", "female", "mother", "mothers"],
+      "GENDER": ["gender", "woman", "women", "girl", "girls", "man", "men", "male", "female", "mother", "mothers", "she", "her", "he", "his", "engineer", "emotional", "too emotional", "senior roles", "leadership"],
       "RACE_ETHNICITY": ["race", "racial", "ethnic", "ethnicity", "black", "white", "asian", "latino", "latina"],
       "AGE": ["age", "young", "younger", "old", "older", "elderly"],
       "RELIGION": ["religion", "religious", "muslim", "christian", "hindu", "jewish", "sikh"],
@@ -70,14 +85,16 @@
     "decision_patterns": [
       {"id": "employment_action", "pattern": "\\b(?:hire|hired|hiring|select|selected|choos(?:e|en)|reject|rejected|evaluate|evaluated|promote|promoted)\\b"},
       {"id": "employment_subject", "pattern": "\\b(?:candidate|candidates|applicant|applicants|employee|employees|worker|workers|engineer|engineers|leader|leaders|role|roles|job|jobs)\\b"},
-      {"id": "fairness_policy", "pattern": "\\b(?:discrimination|anti-discrimination|equal opportunity)\\b"}
+      {"id": "fairness_policy", "pattern": "\\b(?:discrimination|anti-discrimination|equal opportunity)\\b"},
+      {"id": "review_context", "pattern": "\\b(?:review|performance review|assessment|evaluation|write|describe|characterize)\\b"}
     ],
     "treatment_patterns": [
       {"id": "preference", "pattern": "\\b(?:prefer(?:red|ence)?|before|over|instead of|ahead of|receive preference)\\b"},
       {"id": "comparison", "pattern": "\\b(?:better|best|worse|less capable|more professional|generally|usually|naturally)\\b"},
       {"id": "exclusion", "pattern": "\\b(?:should not|do not|don't|cannot|can't|avoid|excluded?)\\b"},
       {"id": "decision_basis", "pattern": "\\b(?:based on|because of|regardless of|regardless)\\b"},
-      {"id": "policy_context", "pattern": "\\b(?:prohibit|prohibits|discrimination|anti-discrimination|equal opportunity)\\b"}
+      {"id": "policy_context", "pattern": "\\b(?:prohibit|prohibits|discrimination|anti-discrimination|equal opportunity)\\b"},
+      {"id": "emotional_label", "pattern": "\\b(?:emotional|too emotional|overly sensitive|too aggressive|not suited|not fit|not right)\\b"}
     ]
   }
 }

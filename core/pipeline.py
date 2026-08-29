@@ -495,11 +495,36 @@ async def run_pipeline(
         return _mock_pii_result("response")
 
     async def _run_bias():
-        """Run bias detection or return mock."""
-        if detect_bias is not None:
-            return await detect_bias(llm_response)
-        logger.debug(f"[{request_id}] detect_bias stubbed — Aman's module")
-        return _mock_bias_result()
+        """
+        Run bias detection on BOTH prompt and LLM response.
+        Combines scores — takes the higher of the two.
+        This catches:
+          - Biased LLM outputs (response scanning)
+          - Biased user requests that the LLM might partially fulfill (prompt scanning)
+        """
+        if detect_bias is None:
+            logger.debug(f"[{request_id}] detect_bias stubbed — Aman's module")
+            return _mock_bias_result()
+
+        # Run prompt and response bias scans in parallel
+        prompt_bias, response_bias = await asyncio.gather(
+            detect_bias(request.prompt),
+            detect_bias(llm_response),
+        )
+
+        # Return whichever has higher risk score
+        if prompt_bias.score >= response_bias.score:
+            logger.debug(
+                f"[{request_id}] Bias: prompt score {prompt_bias.score:.3f} "
+                f"higher than response score {response_bias.score:.3f}"
+            )
+            return prompt_bias
+        else:
+            logger.debug(
+                f"[{request_id}] Bias: response score {response_bias.score:.3f} "
+                f"higher than prompt score {prompt_bias.score:.3f}"
+            )
+            return response_bias
 
     # THE KEY LINE — all 3 run simultaneously, not sequentially
     groundedness_result, pii_response_result, bias_result = await asyncio.gather(
