@@ -30,6 +30,33 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_risk_level   ON audit_log (risk_level);
 CREATE INDEX IF NOT EXISTS idx_audit_log_action_taken ON audit_log (action_taken);
 CREATE INDEX IF NOT EXISTS idx_audit_log_tenant_id    ON audit_log (tenant_id);
 
+-- ── human review queue ───────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS human_reviews (
+    id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    request_id              UUID        NOT NULL UNIQUE REFERENCES audit_log(id),
+    tenant_id               VARCHAR(100) NOT NULL,
+    use_case                VARCHAR(50)  NOT NULL,
+    status                  VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
+    sentinelai_action       VARCHAR(20)  NOT NULL,
+    original_response       TEXT         NOT NULL DEFAULT '',
+    holding_response        TEXT         NOT NULL,
+    risk_level              VARCHAR(10)  NOT NULL,
+    risk_score              FLOAT        NOT NULL,
+    action_evidence         JSONB        NOT NULL DEFAULT '{}'::jsonb,
+    groundedness_evidence   JSONB,
+    efficiency_evidence     JSONB,
+    reviewer_id             VARCHAR(100),
+    reviewer_notes          TEXT,
+    edited_response         TEXT,
+    created_at              TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    reviewed_at             TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_human_reviews_status     ON human_reviews (status);
+CREATE INDEX IF NOT EXISTS idx_human_reviews_created_at ON human_reviews (created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_human_reviews_tenant_id  ON human_reviews (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_human_reviews_use_case   ON human_reviews (use_case);
+
 -- ── feedback ─────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS feedback (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -41,8 +68,14 @@ CREATE TABLE IF NOT EXISTS feedback (
     notes               TEXT
 );
 
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS review_id UUID REFERENCES human_reviews(id);
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS false_positive BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE feedback ADD COLUMN IF NOT EXISTS false_negative BOOLEAN NOT NULL DEFAULT FALSE;
+
 CREATE INDEX IF NOT EXISTS idx_feedback_request_id ON feedback (request_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_timestamp  ON feedback (timestamp DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_review_once
+    ON feedback (review_id) WHERE review_id IS NOT NULL;
 
 -- ── policy_config ─────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS policy_config (

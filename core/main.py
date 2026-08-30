@@ -157,6 +157,13 @@ try:
 except ImportError:
     logger.warning("api/routes/feedback.py not found — skipping (Sidhartha builds this)")
 
+try:
+    from api.routes import reviews
+    app.include_router(reviews.router, tags=["Human Review"])
+    logger.info("Human-review routes registered")
+except ImportError:
+    logger.warning("api/routes/reviews.py not found — skipping")
+
 
 # ── Health check endpoint ──────────────────────────────────────────────────────
 @app.get(

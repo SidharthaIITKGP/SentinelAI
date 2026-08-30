@@ -41,6 +41,21 @@ class ActionType(str, Enum):
     ESCALATE = "ESCALATE"
 
 
+class ReviewStatus(str, Enum):
+    """Lifecycle state of a durable human-review item."""
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    EDITED = "EDITED"
+    REJECTED = "REJECTED"
+
+
+class ReviewDecision(str, Enum):
+    """Decisions a reviewer may apply to a pending item."""
+    APPROVE = "APPROVE"
+    EDIT = "EDIT"
+    REJECT = "REJECT"
+
+
 class DetectorStatus(str, Enum):
     """Whether a detector produced an actual result for this request."""
     AVAILABLE = "AVAILABLE"
@@ -1115,6 +1130,106 @@ class FeedbackResponse(BaseModel):
     feedback_id: str = Field(..., description="UUID of this feedback record")
     recorded: bool = Field(..., description="Was it successfully saved?")
     message: str = Field(..., description="Confirmation message")
+
+
+class FeedbackRecord(BaseModel):
+    """Persisted feedback exposed by the internal feedback API."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    feedback_id: str
+    request_id: str
+    sentinelai_action: ActionType
+    correct_action: ActionType
+    reviewer_id: str
+    notes: Optional[str] = None
+    false_positive: bool = False
+    false_negative: bool = False
+    created_at: datetime
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Section 7b — Human Review Schemas
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+class ReviewDecisionRequest(BaseModel):
+    """Atomic decision applied to a still-pending review."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    decision: ReviewDecision
+    reviewer_id: str = Field(..., min_length=1)
+    notes: Optional[str] = None
+    edited_response: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_edited_response(self):
+        if self.decision == ReviewDecision.EDIT.value:
+            if not self.edited_response or not self.edited_response.strip():
+                raise ValueError("EDIT requires a non-blank edited_response")
+            self.edited_response = self.edited_response.strip()
+        return self
+
+
+class ReviewRecord(BaseModel):
+    """Internal reviewer view. Never use this model for public resolution."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    review_id: str
+    request_id: str
+    tenant_id: str
+    use_case: UseCase
+    status: ReviewStatus
+    sentinelai_action: ActionType
+    original_response: str
+    holding_response: str
+    risk_level: RiskLevel
+    risk_score: float
+    action_evidence: Dict[str, Any] = Field(default_factory=dict)
+    groundedness_evidence: Optional[Dict[str, Any]] = None
+    efficiency_evidence: Optional[Dict[str, Any]] = None
+    reviewer_id: Optional[str] = None
+    reviewer_notes: Optional[str] = None
+    edited_response: Optional[str] = None
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+
+
+class ReviewSummary(BaseModel):
+    """Queue listing deliberately excludes held model content."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    review_id: str
+    request_id: str
+    tenant_id: str
+    use_case: UseCase
+    status: ReviewStatus
+    sentinelai_action: ActionType
+    holding_response: str
+    risk_level: RiskLevel
+    risk_score: float
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+
+
+class ReviewResolution(BaseModel):
+    """Public-safe resolution; pending and rejected states never leak held content."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    request_id: str
+    status: ReviewStatus
+    response: str
+
+
+class ReviewMetrics(BaseModel):
+    total_reviews: int = 0
+    pending_reviews: int = 0
+    completed_reviews: int = 0
+    approved_count: int = 0
+    edited_count: int = 0
+    rejected_count: int = 0
+    completion_rate: float = 0.0
+    override_rate: float = 0.0
+    agreement_rate: float = 0.0
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

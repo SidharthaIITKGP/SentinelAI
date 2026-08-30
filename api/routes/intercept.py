@@ -16,9 +16,10 @@ import time
 
 from fastapi import APIRouter, HTTPException
 
-from api.schemas import InterceptRequest, InterceptResponse
+from api.schemas import ActionType, InterceptRequest, InterceptResponse
 from core.pipeline import run_pipeline
 from data.audit_logger import log_request
+from data.review_store import review_store
 
 logger = logging.getLogger("sentinelai.intercept")
 
@@ -60,6 +61,14 @@ async def intercept(request: InterceptRequest) -> InterceptResponse:
     except Exception as e:
         logger.warning(f"Audit log failed (non-fatal): {e}")
         request_id = audit_entry.request_id
+
+    # Escalations become durable review work. Queue failure must never release
+    # held content or make the intercept endpoint fail open.
+    if action_result.action == ActionType.ESCALATE.value:
+        try:
+            await review_store.enqueue(audit_entry)
+        except Exception as e:
+            logger.error("Human-review enqueue failed for %s: %s", request_id, e)
 
     # Total wall-clock latency (includes audit write)
     total_latency_ms = max(1, int((time.time() - wall_start) * 1000))

@@ -18,9 +18,9 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 
 ## Current Status
 
-**Current phase:** Phase 3 — COMPLETE
-**Completed phases:** Phase 1 — Governance correctness and safety; Phase 2 — Groundedness uncertainty and real repair; Phase 3 — Real Efficiency Engine and Model Routing
-**Next phase:** Phase 4 — Human Review and Feedback Loop
+**Current phase:** Phase 4 — COMPLETE
+**Completed phases:** Phase 1 — Governance correctness and safety; Phase 2 — Groundedness uncertainty and real repair; Phase 3 — Real Efficiency Engine and Model Routing; Phase 4 — Human Review and Feedback Loop
+**Next phase:** Phase 5 — Enterprise Hardening and Claim Cleanup
 
 ### Baseline verification observed on 2026-08-30
 
@@ -49,7 +49,7 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 - REPAIR was replaced in Phase 2 with one bounded, evidence-constrained attempt and a mandatory groundedness recheck.
 - Phase 3 replaced same-model routing with three distinct estimated profiles and capability-first selection.
 - Phase 3 added structured cost, latency, model-fit, and overall efficiency evaluation.
-- Human review and feedback schemas exist, but there is no complete review/feedback workflow.
+- Human review, resolution, reviewer feedback, and review metrics are implemented in Phase 4.
 - Multi-turn/session risk is not implemented.
 - Audit persistence retains raw prompt/response content by default.
 - Tenant authentication is claimed conceptually but not implemented.
@@ -667,3 +667,169 @@ when capability, risk policy, context window, or use-case support was unmet.
 
 **Next phase:** Phase 4 — Human Review and Feedback Loop. Do not begin without
 review/authorization.
+
+---
+
+## Phase 4 — Human Review and Feedback Loop
+
+**Phase status:** COMPLETE
+
+### Exact files created or modified
+
+Created:
+
+- `api/routes/feedback.py`
+- `api/routes/reviews.py`
+- `data/review_store.py`
+- `tests/test_phase4_human_review.py`
+
+Modified:
+
+- `api/routes/intercept.py`
+- `api/schemas.py`
+- `core/main.py`
+- `data/schema.sql`
+- `phase.md`
+- `PHASE_HISTORY.md`
+
+### Features and fixes implemented
+
+- Added typed `ReviewStatus` and `ReviewDecision` enums plus separate internal
+  review, queue-summary, decision, public-resolution, feedback-record, and review
+  metrics schemas. Queue listings omit held originals; only the explicitly
+  internal detail model contains them.
+- Added the PostgreSQL `human_reviews` table with a unique audit request foreign
+  key, indexed status/time/tenant/use-case fields, held and holding responses,
+  groundedness/source evidence, routing/efficiency evidence, reviewer data, and
+  timestamps. Enqueue uses `ON CONFLICT (request_id) DO NOTHING` and returns the
+  existing record on a retry.
+- `/intercept` enqueues exactly one PENDING review only for final ESCALATE. Queue
+  failures are logged and the governed holding response remains unchanged; no
+  held content is released. Audit persistence remains route-owned and audit
+  state is not rewritten after review.
+- Added ordered/filterable `GET /reviews`, internal `GET /reviews/{request_id}`,
+  atomic `POST /reviews/{request_id}/decision`, public-safe
+  `GET /reviews/{request_id}/resolution`, and `GET /reviews/metrics`.
+- Decisions use one SQL `UPDATE ... WHERE status='PENDING' RETURNING *`; a second
+  or concurrent decision receives `409`. APPROVE releases the original only via
+  resolution, EDIT requires a stripped nonblank response and releases only that
+  edit, and REJECT returns a fixed safe rejection response.
+- Human decisions create one feedback record in the same database transaction.
+  Mapping is APPROVE→ALLOW, EDIT→REPAIR, and REJECT→ESCALATE: rejection agrees
+  with SentinelAI's original decision to keep the content held. A unique review
+  feedback index supplies an additional exactly-once guard.
+- Added POST/GET feedback persistence. Unknown audit request IDs return `404`;
+  feedback is stored for later analysis and never changes policy, thresholds,
+  training, or runtime behavior.
+- Added zero-safe review totals, status counts, completion rate
+  (`completed/total`), override rate (`approved/completed`), and agreement rate
+  (`(edited+rejected)/completed`).
+- A real Phase 3 hard-routing failure test proves the generation mock is not
+  called, token usage is zero, routing failure evidence is retained, and the
+  resulting escalation enters the review queue.
+
+### Tests added and exact results
+
+- Added 34 offline Phase 4 cases covering action-specific enqueue, duplicate
+  enqueue, enqueue failure safety, hard-routing preflight, queue filtering and
+  ordering, internal evidence, all three decisions, blank edits, missing IDs,
+  sequential and concurrent double decisions, all four resolution states,
+  held-content non-leakage, decision-to-feedback mapping, manual feedback,
+  zero/mixed metrics, schema indexes, and route registration.
+- Before Phase 4 edits: compile exit `0`; full suite
+  `241 passed, 27 warnings in 12.91s`.
+- Final `.venv/bin/python -m compileall -q .`: exit `0`, no output.
+- Final Phase 1: `21 passed, 18 warnings in 7.32s`.
+- Final Phase 2: `13 passed, 6 warnings in 6.90s`.
+- Final Phase 3: `37 passed, 3 warnings in 6.80s`.
+- Final Phase 4: `34 passed, 10 warnings in 7.84s`.
+- Final full suite: `275 passed, 37 warnings in 12.34s`.
+- Warnings are the existing Pydantic exposure of `datetime.utcnow()`
+  deprecation. No test failed or was skipped.
+
+### Test-quality self-review
+
+1. **Could a broken implementation that always APPROVES pass?** No. EDIT and
+   REJECT transitions and their distinct resolution/feedback outcomes are
+   independently asserted.
+2. **Could an implementation leaking original text during PENDING pass?** No.
+   Pending resolution and public queue serialization explicitly assert the held
+   original is absent.
+3. **Could duplicate review creation pass?** No. Repeated interception must leave
+   one queue item, and the database uniqueness/idempotency contract is asserted.
+4. **Could two concurrent reviewers both succeed?** No. The race test requires
+   exactly one `200`, one `409`, and one feedback record.
+5. **Could blank EDIT content pass?** No. Missing, empty, and whitespace-only
+   edited responses are all parameterized validation failures.
+6. **Could invalid state transitions pass?** No. Every decision is PENDING-only
+   and a second transition is required to fail.
+7. **Are 404 paths tested?** Yes. Missing review detail and feedback for an
+   unknown audit request both assert `404`.
+8. **Are 409 paths tested?** Yes. Sequential and concurrent repeat decisions
+   assert `409` conflicts.
+9. **Could incorrect metrics formulas pass?** No. Zero denominators and a mixed
+   PENDING/APPROVED/EDITED/REJECTED dataset verify every requested count and rate.
+10. **Could feedback be duplicated?** No. Duplicate/concurrent decisions assert
+    one record, and persistence has a unique per-review feedback index.
+11. **Are tests independent of exact helper function names?** Yes. Product tests
+    exercise route contracts and mock only the PostgreSQL store boundary; they do
+    not depend on private production helper names.
+12. **Do previous Phase 1–3 regressions still run?** Yes. All three required
+    suites and the complete suite were rerun after implementation.
+
+### Important design decisions
+
+- PostgreSQL is the sole review-state authority. Audit rows stay immutable and
+  no in-memory production queue or conflicting `human_reviewed` audit update was
+  added.
+- The review store owns transition SQL and feedback transactionality; route
+  handlers only translate domain not-found/conflict outcomes to HTTP responses.
+- Internal review detail and public resolution are different schemas and routes.
+  This structural separation prevents accidental serialization of held content.
+- REVIEW REJECT maps to feedback action ESCALATE because both mean SentinelAI was
+  correct not to release the original; it does not invent a new action type.
+- Queue write failure is non-fatal only because the intercept response has
+  already failed closed to a safe holding message.
+
+### Known remaining limitations
+
+- Reviewer authentication, tenant authorization, administrative route security,
+  and per-tenant access control are explicitly deferred to Phase 5; the detail
+  endpoint is internal by contract but not yet identity-enforced.
+- Raw held prompt/response retention, encryption, deletion, and retention policy
+  remain Phase 5 privacy work.
+- Offline tests mock PostgreSQL boundaries; they validate SQL invariants but do
+  not require a live database service. Deployment must apply `data/schema.sql`.
+- A failed queue write is logged but has no retry/outbox worker yet. Safety is
+  preserved, but operational recovery is manual.
+- Resolution is pull-based because the original HTTP request is closed; no push
+  notification channel is claimed.
+- Feedback is durable evidence only. It intentionally performs no learning or
+  automated policy/threshold change.
+
+### Phase 5 must preserve
+
+- Exactly-one ESCALATE enqueue and no queue records for other actions.
+- Atomic PENDING-only review decisions and one transactional feedback record.
+- Public pending/rejected non-leakage and separate internal reviewer detail.
+- APPROVE/EDIT/REJECT resolution semantics and documented feedback mapping.
+- Immutable audit history and PostgreSQL-owned review state.
+- Phase 1 governance, Phase 2 bounded repair, Phase 3 hard-routing preflight and
+  latency behavior, and all 275 regression tests.
+
+### Phase 5 constraints
+
+Phase 4 did not implement JWT, tenant API keys, OPA, OpenTelemetry, Redis session
+tracking, multi-turn risk, privacy-aware persistence redesign, production CORS,
+health cleanup, or architecture-claim cleanup. Those remain exclusively scoped
+to Phase 5.
+
+### Phase 6 deferred work
+
+Top-k trust aggregation, unsafe groundedness defaults, an adversarial trust
+benchmark, precision/recall/FPR/FNR/action accuracy, P95 governance latency,
+benchmarked cost savings, Governance Receipts, and the final deterministic
+competition demo suite remain deferred and unchanged.
+
+**Next phase:** Phase 5 — Enterprise Hardening and Claim Cleanup. Do not begin
+without review/authorization.

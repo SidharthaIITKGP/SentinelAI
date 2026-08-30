@@ -327,3 +327,50 @@ actions and risk thresholds, Phase 2 bounded repair, and every Phase 1–3 test.
 
 **Current phase:** Phase 3 — COMPLETE
 **Next phase:** Phase 4 — Human Review and Feedback Loop (not started).
+
+## 2026-08-30 — Phase 4 COMPLETE
+
+Phase 4 added a durable PostgreSQL human-review queue, internal reviewer detail,
+atomic decisions, public-safe resolution polling, durable feedback, and review
+metrics without changing completed Phase 1–3 governance behavior.
+
+Created `api/routes/reviews.py`, `api/routes/feedback.py`,
+`data/review_store.py`, and `tests/test_phase4_human_review.py`. Modified
+`api/routes/intercept.py`, `api/schemas.py`, `core/main.py`, `data/schema.sql`,
+`phase.md`, and this append-only history.
+
+Only final ESCALATE actions enqueue. The database unique request key plus
+`ON CONFLICT (request_id) DO NOTHING` makes retries idempotent. Queue failures
+are logged while the safe holding response remains public. Internal review
+records include held output, policy/action evidence, groundedness/source data,
+and routing/efficiency data; list summaries and public resolutions use separate
+non-leaking schemas.
+
+Decisions use an atomic pending-only UPDATE with RETURNING. APPROVE releases the
+held original, EDIT requires and releases a nonblank reviewer edit, and REJECT
+returns a fixed safe response. The same transaction writes exactly one feedback
+record using APPROVE→ALLOW, EDIT→REPAIR, and REJECT→ESCALATE. PostgreSQL remains
+the review authority and audit rows are not mutated.
+
+Review metrics report totals, status counts, completion, override, and agreement
+rates with zero-safe denominators. Manual feedback rejects unknown audit IDs and
+never changes learning, policy, thresholds, or runtime behavior.
+
+The 34-case Phase 4 suite includes an actual hard-routing failure that asserts no
+LLM call, zero generation tokens, routing evidence, and review enqueue. It also
+covers all actions, duplicate/failing enqueue, filtering, evidence, every
+decision and resolution, blank edits, missing IDs, sequential/concurrent races,
+non-leakage, feedback mappings, metrics, persistence invariants, and routes.
+
+Verification completed with compile exit `0`; Phase 1 `21 passed, 18 warnings`;
+Phase 2 `13 passed, 6 warnings`; Phase 3 `37 passed, 3 warnings`; Phase 4
+`34 passed, 10 warnings`; and full suite `275 passed, 37 warnings`. The warnings
+are the existing Pydantic `datetime.utcnow()` deprecation; no failures or skips.
+
+Known limitations intentionally left for Phase 5 include reviewer/tenant auth,
+raw-content privacy and retention, live PostgreSQL integration verification, and
+an operational retry/outbox for failed enqueue. Resolution is intentionally
+pull-based and feedback does not automatically learn.
+
+**Current phase:** Phase 4 — COMPLETE
+**Next phase:** Phase 5 — Enterprise Hardening and Claim Cleanup (not started).
