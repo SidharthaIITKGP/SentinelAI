@@ -22,7 +22,7 @@ logger = logging.getLogger("sentinelai")
 
 async def detect_bias(text: str) -> BiasResult:
     """
-    Detect bias in LLM response text using hybrid detection.
+    Detect bias using hybrid detection + semantic toxicity concepts.
     Called in Step 4 EVALUATE (parallel with groundedness + PII).
 
     Uses Aman's 4-layer hybrid detector:
@@ -30,6 +30,8 @@ async def detect_bias(text: str) -> BiasResult:
       - Semantic embedding similarity
       - Toxicity classifier (HuggingFace)
       - Optional LLM bias judge
+    Now also checks semantic similarity against toxic concept embeddings
+    in addition to pattern matching and classifier.
 
     Args:
         text: LLM response text to evaluate for bias
@@ -47,6 +49,28 @@ async def detect_bias(text: str) -> BiasResult:
             return detector.scan(text, scan_target="response")
 
         result = await loop.run_in_executor(None, _run)
+
+        # Also run semantic toxicity check
+        try:
+            from core.injection_detector import scan_toxic_content
+            if scan_toxic_content is not None:
+                is_toxic, toxic_score, toxic_concept = await scan_toxic_content(text)
+                if is_toxic and toxic_score > result.score:
+                    # Semantic check found higher signal — use it
+                    logger.info(
+                        f"Semantic toxicity enhancing bias score | "
+                        f"old={result.score:.3f} new={toxic_score:.3f} | "
+                        f"concept={toxic_concept}"
+                    )
+                    result.detected = True
+                    result.score = toxic_score
+                    result.risk_score = toxic_score
+                    result.detection_method = "semantic_embedding"
+                    if not result.flagged_segments:
+                        result.flagged_segments = [text[:100]]
+        except Exception as e:
+            logger.debug(f"Semantic toxicity check in bias detector failed: {e}")
+
         logger.debug(
             f"Bias scan complete | "
             f"detected={result.detected} | score={result.score:.3f} | "

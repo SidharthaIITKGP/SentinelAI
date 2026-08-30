@@ -64,9 +64,9 @@ logger = logging.getLogger("sentinelai")
 # Constants
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "all-mpnet-base-v2"
 QDRANT_COLLECTION = "knowledge_base"
-QDRANT_VECTOR_DIM = 384
+QDRANT_VECTOR_DIM = 768
 
 # Minimum similarity score for a claim to be considered grounded
 # per use case — finance is strictest (financial claims must be sourced)
@@ -120,6 +120,17 @@ async def initialize_knowledge_base(
 
     # Create collection if it doesn't exist
     existing = [c.name for c in _qdrant_client.get_collections().collections]
+
+    if QDRANT_COLLECTION in existing:
+        try:
+            sample = _qdrant_client.get_collection(QDRANT_COLLECTION)
+            if sample.config.params.vectors.size != QDRANT_VECTOR_DIM:
+                logger.info(f"Vector dimension changed — recreating {QDRANT_COLLECTION}")
+                _qdrant_client.delete_collection(QDRANT_COLLECTION)
+                existing.remove(QDRANT_COLLECTION)
+        except Exception:
+            pass
+
     if QDRANT_COLLECTION not in existing:
         logger.info(f"Creating Qdrant collection: {QDRANT_COLLECTION}")
         _qdrant_client.create_collection(

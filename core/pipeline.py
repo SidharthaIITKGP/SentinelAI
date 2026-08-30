@@ -47,8 +47,10 @@ logger = logging.getLogger("sentinelai")
 # ── Sidhartha's own engine modules (stubbed until Day 2) ──────────────────────
 try:
     from core.injection_detector import scan as injection_scan
+    from core.injection_detector import scan_toxic_content
 except ImportError:
     injection_scan = None
+    scan_toxic_content = None
     logger.warning("injection_detector not found — stubbed")
 
 try:
@@ -333,7 +335,7 @@ async def run_pipeline(
         logger.debug(f"[{request_id}] injection_scan stubbed")
 
     # Early exit: critical injection → immediate BLOCK
-    if injection_result.detected and injection_result.confidence > 0.90:
+    if injection_result.detected and injection_result.confidence >= 0.90:
         logger.warning(
             f"[{request_id}] CRITICAL INJECTION DETECTED — "
             f"confidence={injection_result.confidence:.2f} — immediate BLOCK"
@@ -365,7 +367,19 @@ async def run_pipeline(
             pii_response_result=_mock_pii_result("response"),
             groundedness_result=_mock_groundedness_result(request.use_case),
             bias_result=_mock_bias_result(),
-            risk_score=_mock_risk_score_high(request.use_case),
+            risk_score=RiskScore(
+                overall=0.95,
+                level=RiskLevel.HIGH,
+                breakdown=RiskBreakdown(
+                    injection_score=injection_result.confidence,
+                    pii_prompt_score=0.0,
+                    pii_response_score=0.0,
+                    groundedness_risk=0.0,
+                    bias_score=0.0,
+                    dominant_signal="injection",
+                ),
+                use_case=request.use_case,
+            ),
             policy_decision=PolicyDecision(
                 approved=False,
                 final_action=ActionType.BLOCK,
@@ -421,7 +435,19 @@ async def run_pipeline(
                 pii_response_result=_mock_pii_result("response"),
                 groundedness_result=_mock_groundedness_result(request.use_case),
                 bias_result=prompt_safety,
-                risk_score=_mock_risk_score_high(request.use_case),
+                risk_score=RiskScore(
+                    overall=0.95,
+                    level=RiskLevel.HIGH,
+                    breakdown=RiskBreakdown(
+                        injection_score=0.0,
+                        pii_prompt_score=0.0,
+                        pii_response_score=0.0,
+                        groundedness_risk=0.0,
+                        bias_score=prompt_safety.score,
+                        dominant_signal="bias",
+                    ),
+                    use_case=request.use_case,
+                ),
                 policy_decision=PolicyDecision(
                     approved=False,
                     final_action=ActionType.BLOCK,
@@ -436,6 +462,78 @@ async def run_pipeline(
                 step_latencies={"scan": latency_ms},
             )
             return block_result, audit_entry
+
+    # Semantic toxicity check — catches toxic content not covered by bias patterns
+    # Runs AFTER injection check, BEFORE LLM call
+    # Uses embedding similarity against toxic concept seeds in Qdrant
+    if scan_toxic_content is not None:
+        is_toxic, toxic_score, toxic_concept = await scan_toxic_content(request.prompt)
+        if is_toxic and toxic_score > 0.72:
+            logger.warning(
+                f"[{request_id}] SEMANTIC TOXICITY DETECTED — "
+                f"concept={toxic_concept} | "
+                f"similarity={toxic_score:.3f} — immediate BLOCK"
+            )
+            toxic_block_result = ActionResult(
+                action=ActionType.BLOCK,
+                final_response=BLOCK_MESSAGES.get(
+                    str(request.use_case),
+                    DEFAULT_BLOCK_MESSAGE
+                ),
+                original_response="",
+                explanation=f"Toxic content detected — concept: {toxic_concept} (semantic similarity: {toxic_score:.3f})",
+                evidence={
+                    "toxic_concept": toxic_concept,
+                    "semantic_similarity": toxic_score,
+                    "detection_method": "semantic_embedding",
+                },
+                escalation_required=True,
+            )
+            latency_ms = max(1, int((time.time() - pipeline_start) * 1000))
+            audit_entry = _build_audit_entry(
+                request_id=request_id,
+                request=request,
+                llm_response="[BLOCKED — toxic content detected]",
+                action_result=toxic_block_result,
+                injection_result=injection_result,
+                pii_prompt_result=pii_prompt_result,
+                pii_response_result=_mock_pii_result("response"),
+                groundedness_result=_mock_groundedness_result(request.use_case),
+                bias_result=BiasResult(
+                    detected=True,
+                    score=toxic_score,
+                    confidence=toxic_score,
+                    detection_method="semantic_embedding",
+                    bias_types=[],
+                    flagged_segments=[request.prompt[:100]],
+                ),
+                risk_score=RiskScore(
+                    overall=0.95,
+                    level=RiskLevel.HIGH,
+                    breakdown=RiskBreakdown(
+                        injection_score=0.0,
+                        pii_prompt_score=0.0,
+                        pii_response_score=0.0,
+                        groundedness_risk=0.0,
+                        bias_score=toxic_score,
+                        dominant_signal="bias",
+                    ),
+                    use_case=request.use_case,
+                ),
+                policy_decision=PolicyDecision(
+                    approved=False,
+                    final_action=ActionType.BLOCK,
+                    reason=f"Semantic toxicity detected — concept: {toxic_concept}",
+                    policy_file="semantic_toxicity_guard",
+                    threshold_applied=0.72,
+                ),
+                model_used="none",
+                tokens_input=0,
+                tokens_output=0,
+                latency_ms=latency_ms,
+                step_latencies={"scan": latency_ms},
+            )
+            return toxic_block_result, audit_entry
 
     step_latencies["scan"] = int((time.time() - step_start) * 1000)
     logger.info(
@@ -633,8 +731,54 @@ async def run_pipeline(
             secrets_detected=False,
         )
     else:
-        policy_decision = _mock_policy_decision()
-        logger.debug(f"[{request_id}] evaluate_policy stubbed — Aman's module")
+        # Deterministic inline policy fallback — replaces mock that always returned ALLOW
+        use_case_str = (
+            request.use_case.value if hasattr(request.use_case, "value")
+            else str(request.use_case)
+        )
+        BLOCK_THRESHOLDS = {
+            "customer_chatbot": 0.75,
+            "hr_copilot":       0.85,
+            "finance_tool":     0.70,
+        }
+        ESCALATE_THRESHOLDS = {
+            "customer_chatbot": 0.60,
+            "hr_copilot":       0.75,
+            "finance_tool":     0.55,
+        }
+        block_at    = BLOCK_THRESHOLDS.get(use_case_str, 0.75)
+        escalate_at = ESCALATE_THRESHOLDS.get(use_case_str, 0.60)
+
+        if risk_score.overall >= block_at:
+            final_action = ActionType.BLOCK
+            reason = f"Risk score {risk_score.overall:.3f} >= block threshold {block_at}"
+        elif risk_score.overall >= escalate_at:
+            final_action = ActionType.ESCALATE
+            reason = f"Risk score {risk_score.overall:.3f} >= escalate threshold {escalate_at}"
+        elif pii_response_result.found:
+            final_action = ActionType.REDACT
+            reason = "PII detected in response — redacting"
+        elif bias_result.detected and bias_result.score > 0.70:
+            final_action = ActionType.ESCALATE
+            reason = f"Bias detected with score {bias_result.score:.3f}"
+        elif risk_score.breakdown.groundedness_risk > 0.50:
+            final_action = ActionType.REPAIR
+            reason = f"Groundedness risk {risk_score.breakdown.groundedness_risk:.3f} — hallucination detected"
+        else:
+            final_action = ActionType.ALLOW
+            reason = f"Risk score {risk_score.overall:.3f} below all thresholds"
+
+        policy_decision = PolicyDecision(
+            approved=final_action in [ActionType.ALLOW, ActionType.REPAIR, ActionType.REDACT],
+            final_action=final_action,
+            reason=reason,
+            policy_file="inline_policy_fallback",
+            threshold_applied=block_at,
+        )
+        logger.info(
+            f"[{request_id}] Inline policy fallback | "
+            f"action={final_action} | reason={reason}"
+        )
 
     # Action execution
     # REAL (Day 2): action_result = await execute_action(policy_decision, risk_score, ...)

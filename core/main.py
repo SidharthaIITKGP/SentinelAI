@@ -8,6 +8,7 @@ All service initialization is stubbed — real connections wired in Day 2-3.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -16,6 +17,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes.responsibility import router as responsibility_router
 from api.schemas import HealthResponse
+
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -42,7 +46,7 @@ async def lifespan(app: FastAPI):
     logger.info("[1/5] Loading knowledge base from sample_docs.json...")
     try:
         from engines.trust.groundedness import initialize_knowledge_base
-        await initialize_knowledge_base()
+        await initialize_knowledge_base(qdrant_host=QDRANT_HOST, qdrant_port=QDRANT_PORT)
         logger.info("[1/5] Knowledge base loaded ✅")
     except Exception as exc:
         logger.warning(f"[1/5] Knowledge base / Qdrant unavailable (non-fatal): {exc}")
@@ -52,7 +56,7 @@ async def lifespan(app: FastAPI):
     logger.info("[2/5] Initializing injection detector...")
     try:
         from core.injection_detector import init_injection_detector
-        await init_injection_detector()
+        await init_injection_detector(qdrant_host=QDRANT_HOST, qdrant_port=QDRANT_PORT)
         logger.info("[2/5] Injection detector initialized ✅")
     except Exception as exc:
         logger.warning(f"[2/5] Injection detector init failed (non-fatal): {exc}")

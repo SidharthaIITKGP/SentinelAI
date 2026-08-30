@@ -739,6 +739,10 @@ class InterceptResponse(BaseModel):
         default_factory=dict,
         description="Summary of what was found and why action was taken"
     )
+    risk_breakdown: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Per-signal risk breakdown for dashboard display"
+    )
     governed: bool = Field(
         default=True, description="Always True — signals this response was governed"
     )

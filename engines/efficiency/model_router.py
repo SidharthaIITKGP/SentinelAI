@@ -24,7 +24,7 @@ logger = logging.getLogger("sentinelai.model_router")
 
 # FIX #6: default model changed from gpt-4o-mini to groq/qwen/qwen3.8-27b
 DEFAULT_MODEL = "groq/qwen/qwen3.8-27b"
-PREMIUM_MODEL = "gpt-4o"
+PREMIUM_MODEL = "groq/qwen/qwen3.8-27b"
 
 # Customer-facing use cases (require higher quality when stakes are high)
 CUSTOMER_FACING = {

@@ -11,16 +11,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Gaurav's extra deps
-RUN pip install --no-cache-dir \
-    asyncpg>=0.29 \
-    litellm>=1.40 \
-    python-dotenv>=1.0
+# Pre-download the stronger embedding model during build
+# all-mpnet-base-v2: 420MB, 768-dim, much stronger than all-MiniLM-L6-v2
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-mpnet-base-v2')"
 
 COPY . .
 
-# Download spacy model
-RUN python -m spacy download en_core_web_lg 2>/dev/null || python -m spacy download en_core_web_sm
+# Download spacy model (must match NLP_MODEL in engines/responsibility/pii_check/pii_detector.py)
+RUN python -m spacy download en_core_web_sm
 
 EXPOSE 8000
 

@@ -83,4 +83,12 @@ async def intercept(request: InterceptRequest) -> InterceptResponse:
         evidence=action_result.evidence,
         governed=True,
         escalation_required=action_result.escalation_required,
+        risk_breakdown={
+            "injection_score":    audit_entry.risk_score.breakdown.injection_score,
+            "pii_prompt_score":   audit_entry.risk_score.breakdown.pii_prompt_score,
+            "pii_response_score": audit_entry.risk_score.breakdown.pii_response_score,
+            "groundedness_risk":  audit_entry.risk_score.breakdown.groundedness_risk,
+            "bias_score":         audit_entry.risk_score.breakdown.bias_score,
+            "dominant_signal":    audit_entry.risk_score.breakdown.dominant_signal,
+        },
     )
