@@ -69,11 +69,13 @@ INJECTION_PATTERNS: list[tuple[str, str]] = [
     (r"ignore\s+(?:the\s+)?system\s+(?:message|prompt|instructions)", "instruction_override"),
     (r"override\s+(?:your\s+)?(?:instructions|rules|policies)", "instruction_override"),
     (r"system\s+override\s*:", "instruction_override"),
+    (r"(?:pretend|assume|imagine).{0,45}(?:previous|prior|earlier).{0,25}(?:rules|instructions|policies).{0,20}(?:do\s+not|don't|no\s+longer).{0,12}apply", "instruction_override"),
     (r"(your\s+)?(new|updated)\s+(instructions|directive|rules|guidelines)\s+(are|is|override)", "instruction_override"),
 
     # Family 3 — System Prompt Extraction
     (r"(print|show|display|reveal|output|repeat|tell\s+me)\s+(your\s+)?(system\s+prompt|initial\s+prompt|original\s+instructions|hidden\s+instructions|configuration)", "system_prompt_extraction"),
     (r"reveal\s+(?:your\s+)?hidden\s+prompt", "system_prompt_extraction"),
+    (r"(?:reveal|show|print|expose|provide|repeat|dump).{0,30}(?:hidden|system|developer|internal).{0,18}(?:prompt|instructions|message|policy|rules)", "system_prompt_extraction"),
     (r"what\s+(are\s+)?(your|the)\s+(instructions|system\s+prompt|guidelines|directives)\s+(you\s+were\s+given)?", "system_prompt_extraction"),
     (r"(repeat|output|print)\s+(everything|all\s+text)\s+(above|before|prior)", "system_prompt_extraction"),
 
@@ -92,7 +94,10 @@ INJECTION_PATTERNS: list[tuple[str, str]] = [
     (r"do\s+anything\s+now", "jailbreak"),
     (r"(jailbreak|bypass|circumvent|override)\s+(your\s+)?(safety|filter|restriction|guideline|policy)(?:\s+(?:controls?|filters?))?", "jailbreak"),
     (r"pretend\s+(?:there\s+are|you\s+have)\s+no\s+(?:rules|restrictions|policies)", "jailbreak"),
+    (r"(?:act|roleplay|behave)\s+as.{0,35}(?:unrestricted|without\s+(?:rules|limits|safety)|no\s+(?:rules|restrictions))", "identity_override"),
+    (r"(?:bypass|disable|evade|circumvent|ignore|override).{0,24}(?:safety|guardrails?|controls?|filters?|restrictions?|privacy\s+polic(?:y|ies))", "jailbreak"),
     (r"ignore\s+confidentiality\s+rules", "data_exfiltration"),
+    (r"(?:reveal|expose|dump|extract|leak|disclose).{0,35}(?:private|confidential|internal|hidden).{0,25}(?:data|records?|secrets?|information|forecasts?)", "data_exfiltration"),
 ]
 
 
@@ -416,15 +421,45 @@ async def init_injection_detector(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
+def _is_benign_injection_discussion(prompt: str, match: re.Match[str]) -> bool:
+    """Recognize quoted or clearly reported attack language in educational text.
+
+    This is deliberately narrow: adding words such as "research" to an actual
+    imperative does not bypass detection. The matched attack phrase must be
+    quoted or grammatically attributed to an example/attacker.
+    """
+    lowered = prompt.casefold()
+    discussion_markers = (
+        "prompt injection", "jailbreak", "security training", "security research",
+        "detection rule", "attack example", "malicious example",
+    )
+    if not any(marker in lowered for marker in discussion_markers):
+        return False
+
+    before = prompt[:match.start()]
+    after = prompt[match.end():]
+    for quote in ('"', "'", "`"):
+        if before.count(quote) % 2 == 1 and after.count(quote) % 2 == 1:
+            return True
+
+    reporting_prefix = before[-90:].casefold()
+    return bool(re.search(
+        r"(?:attackers?|researchers?|an?\s+(?:example|phrase|pattern)|"
+        r"documentation|training\s+material)\s+(?:may|might|can|could|says?|uses?|such\s+as)?\s*$",
+        reporting_prefix,
+    ))
+
+
 def _scan_regex(prompt: str) -> tuple[bool, Optional[str], Optional[str]]:
     """
     Layer 1: Fast regex pattern matching.
     Returns (detected, matched_pattern, family).
     Case-insensitive. Returns on first match.
     """
-    prompt_lower = prompt.lower()
     for pattern, family in INJECTION_PATTERNS:
-        if re.search(pattern, prompt_lower, re.IGNORECASE | re.DOTALL):
+        for match in re.finditer(pattern, prompt, re.IGNORECASE | re.DOTALL):
+            if _is_benign_injection_discussion(prompt, match):
+                continue
             logger.debug(f"Regex match | family={family} | pattern={pattern[:50]}")
             return True, pattern, family
     return False, None, None

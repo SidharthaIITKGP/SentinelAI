@@ -68,6 +68,7 @@ def calculate_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
             safe_divide(sum(item["expected_action"] == item["actual_action"] for item in results), len(results)),
             6,
         ),
+        "llm_calls_avoided": sum(bool(item.get("llm_call_avoided")) for item in results),
         "average_latency_ms": round(safe_divide(sum(latencies), len(latencies)), 4),
         "p95_latency_ms": round(percentile(latencies, 0.95), 4),
     }
@@ -146,6 +147,7 @@ def run_benchmark(dataset_path: Path = DEFAULT_DATASET, output_path: Path = DEFA
             "expected_action": case["expected_action"], "actual_action": actual_action,
             "actual_verdict": verdict, "latency_ms": round(latency_ms, 4),
             "selected_tier": tier,
+            "llm_call_avoided": actual_action == "BLOCK",
         })
 
     categories = sorted({item["category"] for item in results})

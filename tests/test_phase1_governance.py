@@ -22,6 +22,7 @@ from api.schemas import (
     BiasResult,
     DetectorStatus,
     GroundednessResult,
+    GroundednessVerdict,
     InjectionResult,
     InterceptRequest,
     PIIEntity,
@@ -391,6 +392,7 @@ def test_intercept_writes_exactly_one_audit_entry(monkeypatch) -> None:
 
     async def verified_groundedness(response: str, use_case: UseCase):
         return GroundednessResult(
+            verdict=GroundednessVerdict.SUPPORTED,
             score=1.0,
             total_claims_checked=1,
             grounded_claims_count=1,

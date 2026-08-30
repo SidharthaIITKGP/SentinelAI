@@ -18,9 +18,9 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 
 ## Current Status
 
-**Current phase:** Phase 5 — COMPLETE
-**Completed phases:** Phase 1 — Governance correctness and safety; Phase 2 — Groundedness uncertainty and real repair; Phase 3 — Real Efficiency Engine and Model Routing; Phase 4 — Human Review and Feedback Loop; Phase 5 — Enterprise Hardening and Complete System Integration
-**Next phase:** Phase 6 — Final Benchmark + Demo Readiness
+**Current phase:** Phase 6 — COMPLETE
+**Completed phases:** Phase 1 — Governance correctness and safety; Phase 2 — Groundedness uncertainty and real repair; Phase 3 — Real Efficiency Engine and Model Routing; Phase 4 — Human Review and Feedback Loop; Phase 5 — Enterprise Hardening and Complete System Integration; Phase 6 — Benchmark, Demo Readiness, and Winning Evidence
+**Next phase:** None — requested remediation roadmap complete
 
 ### Baseline verification observed on 2026-08-30
 
@@ -60,7 +60,8 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 - Unused Redis was removed from active runtime configuration.
 - Active documentation now accurately describes YAML policy-as-code and
   application-level instrumentation; OPA/OpenTelemetry are optional extensions.
-- Evaluation metrics such as precision, recall, false-positive rate, false-negative rate, action accuracy, and P95 governance latency are missing.
+- Phase 6 now provides measured offline precision, recall, false-positive rate,
+  false-negative rate, action accuracy, average latency, and P95 latency.
 
 ---
 
@@ -257,6 +258,127 @@ Turn the prototype into a measurable competition submission.
 - One command runs the benchmark and prints/saves results.
 - One documented demo flow exercises the major actions.
 - All automated tests pass.
+
+### Phase status: COMPLETE
+
+#### Exact files created
+
+- `benchmarks/sentinel_benchmark.json`
+- `benchmarks/run_benchmark.py`
+- `benchmarks/results.json`
+- `core/governance_receipt.py`
+- `tests/test_phase6_final.py`
+- `DEMO.md`
+
+#### Exact files modified
+
+- `api/schemas.py`
+- `api/routes/intercept.py`
+- `core/injection_detector.py`
+- `engines/trust/groundedness.py`
+- `tests/test_phase1_governance.py` (the verified test fixture now explicitly
+  declares `SUPPORTED` after the production schema default became fail-safe)
+- `phase.md`
+- `PHASE_HISTORY.md`
+
+#### Features and fixes implemented
+
+- Groundedness evaluates every retrieved top-k candidate. The strongest support
+  and contradiction are compared, a `0.05` similarity margin treats comparably
+  strong conflict as `INSUFFICIENT_EVIDENCE`, stronger support can override a
+  lower-ranked contradiction, and weak/unrelated evidence remains insufficient.
+- `GroundednessResult` now defaults to `INSUFFICIENT_EVIDENCE`, never
+  accidentally to `SUPPORTED`; verified callers and fixtures declare support
+  explicitly.
+- Injection regex coverage now generalizes across instruction override, hidden
+  prompt extraction, role/policy bypass, indirect "rules no longer apply"
+  wording, guardrail bypass, and data exfiltration. A narrow reporting-context
+  guard preserves quoted and grammatically attributed security/research
+  discussion without allowing a malicious imperative prefixed by "research".
+- The compact Governance Receipt is projected from a validated `AuditEntry` and
+  returned by the real `/intercept` path. It contains request/action/risk,
+  policy rules/reason, trust verdict, safe responsibility categories, route,
+  estimated cost, latency, source IDs/titles, repair outcome, and review status;
+  it excludes prompts, raw PII/secret values, excerpts, and hidden reasoning.
+- The 96-case, versioned offline dataset covers clean, injection, PII, secrets,
+  bias, contradiction, insufficient evidence, and grounded cases across all
+  three use cases. The runner invokes deterministic production controls without
+  Groq, internet access, or fabricated results, writes `results.json`, prints a
+  terminal summary, and calculates safe zero-denominator metrics.
+- Routing cost fields are explicitly labeled `ESTIMATED`. The benchmark also
+  records 24 avoided LLM calls (12 injection plus 12 secret pre-generation
+  blocks), selected/baseline estimated cost, and selected tier counts.
+- `DEMO.md` provides eight exact short flows: ALLOW, pre-LLM BLOCK, REDACT,
+  CONTRADICTED→REPAIR→SUPPORTED, ESCALATE/review, economy routing, premium
+  finance routing, and hard-routing failure with no LLM call.
+
+#### Final measured benchmark
+
+The final generated `benchmarks/results.json` contains 96 cases: 72 true
+positives, 24 true negatives, 0 false positives, and 0 false negatives.
+
+- Overall: precision `1.000000`, recall `1.000000`, F1 `1.000000`, FPR
+  `0.000000`, FNR `0.000000`, action accuracy `1.000000`, average governance
+  latency `3.7475 ms`, and P95 `4.0076 ms`.
+- Injection: 12/12 detected; precision/recall/F1/action accuracy `1.000000`, FPR
+  and FNR `0.000000`, average `3.6018 ms`, P95 `3.6843 ms`.
+- Clean: 12/12 correct with action accuracy `1.000000` and FPR `0.000000`;
+  precision/recall/F1 are `0.000000` by the documented zero-positive
+  denominator rule; average `4.6799 ms`, P95 `10.4949 ms`.
+- Bias, contradiction, insufficient evidence, PII, and secrets: each has 12/12
+  correct, precision/recall/F1/action accuracy `1.000000`, FPR/FNR `0.000000`.
+- Grounded: 12/12 correct with action accuracy `1.000000` and FPR `0.000000`;
+  precision/recall/F1 are `0.000000` because the category has no positive cases.
+- Per-category average/P95 milliseconds: bias `3.7121/3.7827`, contradiction
+  `3.7343/4.5976`, grounded `3.6361/3.7374`, insufficient evidence
+  `3.4881/3.5651`, PII `3.5076/3.5519`, secrets `3.6204/3.9845`.
+- Estimated routing: selected `$0.03795458`, standard-baseline `$0.01227690`,
+  estimated savings `-$0.02567768`, with 8 ECONOMY, 46 STANDARD, and 42 PREMIUM
+  routes. The negative savings honestly reflects safety-driven stronger routes.
+
+#### Tests added and exact results
+
+`tests/test_phase6_final.py` adds 16 cases covering top-k evidence competition,
+strong conflict, the safe schema default, receipt completeness/non-disclosure,
+metric mathematics and zero denominators, generalized injection variants,
+benign academic discussion, and full benchmark generation.
+
+- Compile: exit `0`, no output.
+- Phase 1: `21 passed, 18 warnings`.
+- Phase 2: `13 passed, 6 warnings`.
+- Phase 3: `37 passed, 3 warnings`.
+- Phase 4: `34 passed, 10 warnings`.
+- Phase 5: `46 passed, 7 warnings`.
+- Phase 6: `16 passed`.
+- Full suite: `337 passed, 44 warnings`.
+- Benchmark command: exit `0`, 96 cases, metrics shown above.
+- Dashboard was not modified in Phase 6, so no dashboard build was required.
+
+The 44 warnings are the preserved Pydantic `datetime.utcnow()` deprecation
+warnings from Phases 1–5; there are no failures or skips.
+
+#### Important design decisions and honest limitations
+
+- Perfect benchmark scores describe this fixed, curated offline dataset only;
+  they are not a claim of real-world generalization or external model quality.
+- Benchmark latency measures deterministic governance controls and routing on
+  this host, not network/provider generation latency or an end-to-end SLA.
+- The offline bias path measures the production explicit-pattern layer; PII and
+  secret cases use deterministic known-format controls; embeddings, Qdrant,
+  Groq, live PostgreSQL, and external providers are intentionally excluded.
+- Groundedness contradiction remains transparent numeric/polarity/category
+  heuristics over retrieved local evidence, not open-ended temporal or causal
+  reasoning. Conflicting near-equal evidence safely escalates uncertainty.
+- Cost/latency profile values are deterministic estimates, not invoices or live
+  measurements. Safety-driven PREMIUM routing can cost more than the baseline.
+- `governance_receipt` remains schema-optional for wire compatibility and
+  infrastructure-only legacy stubs, but every real typed `/intercept`
+  `AuditEntry` receives one.
+
+Anything after this roadmap must preserve fail-closed routing and policy,
+explicit trust verdicts, top-k conflict uncertainty, receipt non-disclosure,
+tenant/privacy/review boundaries, estimated-value labels, and all 337 tests.
+No new phase is started.
 
 ---
 

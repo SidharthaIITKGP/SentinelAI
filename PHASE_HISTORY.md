@@ -435,3 +435,68 @@ untouched.
 
 **Current phase:** Phase 5 — COMPLETE
 **Next phase:** Phase 6 — Final Benchmark + Demo Readiness (not started).
+
+## 2026-08-30 — Phase 6 COMPLETE
+
+Phase 6 completed the requested benchmark, trust-evidence correction,
+Governance Receipt, injection hardening, and demo readiness without adding a
+new phase. Groundedness now evaluates all top-k candidates: stronger support can
+win, a stronger contradiction wins only without equal/stronger support, and
+conflict within a `0.05` similarity margin becomes
+`INSUFFICIENT_EVIDENCE`. The `GroundednessResult` default is now safely
+insufficient rather than supported.
+
+Generalized injection patterns cover instruction override, system/hidden prompt
+extraction, role and policy bypass, indirect rules-no-longer-apply language,
+guardrail evasion, and data exfiltration. A narrow quoted/reported-discussion
+guard keeps academic and security-training examples from being automatically
+blocked while still detecting direct imperatives, including ones framed as
+research.
+
+Created `benchmarks/sentinel_benchmark.json`, `benchmarks/run_benchmark.py`,
+`benchmarks/results.json`, `core/governance_receipt.py`,
+`tests/test_phase6_final.py`, and `DEMO.md`. Modified `api/schemas.py`,
+`api/routes/intercept.py`, `core/injection_detector.py`,
+`engines/trust/groundedness.py`, and the Phase 1 verified-groundedness fixture
+to declare its verdict explicitly. The authoritative `phase.md` contains the
+full exact file list, decisions, metrics, and preservation constraints.
+
+The real `/intercept` path now returns a compact receipt built from its validated
+audit record: request/action/risk, policy file/rules/reason, trust verdict, safe
+responsibility categories, model/tier/routing reason, estimated cost, latency,
+source IDs/titles, repair outcome, and review requirement. Prompts, raw PII or
+secret values, source excerpts, and hidden reasoning are excluded.
+
+The 96-case offline benchmark spans eight 12-case categories and all three use
+cases. Its final generated result is 72 TP, 24 TN, 0 FP, and 0 FN: precision,
+recall, F1, and action accuracy `1.000000`; FPR and FNR `0.000000`; average
+latency `3.7475 ms`; P95 `4.0076 ms`; and 24 avoided LLM calls. Injection
+improved from 4/12 (`0.333333` recall) to 12/12 (`1.000000` recall), while clean
+traffic remained 12/12 correct with FPR `0.000000`. Bias, contradiction,
+insufficient-evidence, PII, and secret categories are each 12/12 correct;
+grounded and clean categories report zero precision/recall/F1 by the explicit
+zero-positive denominator rule and `1.000000` action accuracy.
+
+Estimated registry routing totals are selected `$0.03795458`, baseline
+`$0.01227690`, and savings `-$0.02567768`, with 8 ECONOMY, 46 STANDARD, and 42
+PREMIUM selections. The negative savings is retained because capability-first
+safety routes cost more than the configured standard baseline; these are
+clearly labeled estimates, not billing.
+
+Final verification: compile exit `0`; Phase 1 `21 passed, 18 warnings`; Phase 2
+`13 passed, 6 warnings`; Phase 3 `37 passed, 3 warnings`; Phase 4 `34 passed, 10
+warnings`; Phase 5 `46 passed, 7 warnings`; Phase 6 `16 passed`; full suite `337
+passed, 44 warnings`; benchmark exit `0`. Dashboard code did not change, so no
+build was required.
+
+Honest limitations: the perfect score applies only to the curated offline set;
+latency excludes provider/network generation; bias/PII/secret benchmarking uses
+deterministic local layers; groundedness remains numeric/polarity/category
+heuristics; live services are excluded; and model cost/latency values are
+estimates. Future work, if separately authorized, must preserve fail-closed
+routing/policy, top-k uncertainty, receipt non-disclosure, tenant/privacy/review
+boundaries, explicit estimate labels, and all 337 regressions.
+
+**Current phase:** Phase 6 — COMPLETE
+**Completed phases:** Phase 1–6
+**Next phase:** None — requested remediation roadmap complete.

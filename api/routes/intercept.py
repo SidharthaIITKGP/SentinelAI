@@ -16,7 +16,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from api.schemas import ActionType, InterceptRequest, InterceptResponse
+from api.schemas import ActionType, AuditEntry, InterceptRequest, InterceptResponse
 from core.pipeline import run_pipeline
 from core.governance_receipt import build_governance_receipt
 from core.security import TenantIdentity, authenticate_tenant, tenant_identity_or_local
@@ -103,7 +103,11 @@ async def intercept(
         latency_ms=audit_entry.latency_ms or total_latency_ms,
         evidence=action_result.evidence,
         efficiency=audit_entry.efficiency,
-        governance_receipt=build_governance_receipt(audit_entry, request_id),
+        governance_receipt=(
+            build_governance_receipt(audit_entry, request_id)
+            if isinstance(audit_entry, AuditEntry)
+            else None
+        ),
         governed=True,
         escalation_required=action_result.escalation_required,
         risk_breakdown={
