@@ -767,7 +767,7 @@ class GroundednessResult(BaseModel):
         description="AVAILABLE when verification ran; UNAVAILABLE when it could not run",
     )
     verdict: GroundednessVerdict = Field(
-        default=GroundednessVerdict.SUPPORTED,
+        default=GroundednessVerdict.INSUFFICIENT_EVIDENCE,
         description="SUPPORTED, CONTRADICTED, INSUFFICIENT_EVIDENCE, or UNAVAILABLE",
     )
 
@@ -958,6 +958,48 @@ class InterceptRequest(BaseModel):
     )
 
 
+class GovernanceEvidenceSource(BaseModel):
+    """Compact source reference; excerpts are deliberately excluded."""
+
+    doc_id: str
+    title: str
+
+
+class ResponsibilityFindings(BaseModel):
+    """Safe detector aggregates with no matched text or secret values."""
+
+    injection_detected: bool = False
+    pii_prompt_types: List[str] = Field(default_factory=list)
+    pii_response_types: List[str] = Field(default_factory=list)
+    bias_detected: bool = False
+    bias_types: List[str] = Field(default_factory=list)
+
+
+class GovernanceReceipt(BaseModel):
+    """Compact, customer-facing proof of the governance decision."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    request_id: str
+    final_action: ActionType
+    use_case: UseCase
+    risk_level: RiskLevel
+    risk_score: float = Field(..., ge=0.0, le=1.0)
+    policy_file: str
+    policy_rule_ids: List[str] = Field(default_factory=list)
+    policy_reason: str
+    trust_verdict: GroundednessVerdict
+    responsibility_findings: ResponsibilityFindings
+    selected_model: Optional[str] = None
+    selected_tier: Optional[ModelTier] = None
+    routing_reason: Optional[str] = None
+    estimated_cost_usd: Optional[float] = Field(default=None, ge=0.0)
+    latency_ms: int = Field(..., ge=0)
+    evidence_sources: List[GovernanceEvidenceSource] = Field(default_factory=list)
+    repair_attempted: bool = False
+    repair_success: bool = False
+    review_required: bool = False
+
+
 class InterceptResponse(BaseModel):
     """Shape of what SentinelAI returns to the enterprise app."""
     model_config = ConfigDict(use_enum_values=True)
@@ -981,6 +1023,10 @@ class InterceptResponse(BaseModel):
     efficiency: Optional[EfficiencyResult] = Field(
         default=None,
         description="Estimated routing, capability, cost, and latency evidence",
+    )
+    governance_receipt: Optional[GovernanceReceipt] = Field(
+        default=None,
+        description="Compact governance proof; contains no prompt, PII, or secret values",
     )
     governed: bool = Field(
         default=True, description="Always True — signals this response was governed"
@@ -1361,7 +1407,7 @@ ALL_SCHEMAS = [
     # Core Pipeline
     "RiskScore", "ActionResult",
     # API Request/Response
-    "InterceptRequest", "InterceptResponse",
+    "InterceptRequest", "GovernanceEvidenceSource", "ResponsibilityFindings", "GovernanceReceipt", "InterceptResponse",
     # Audit
     "AuditEntry",
     # Feedback

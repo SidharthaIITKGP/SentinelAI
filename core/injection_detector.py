@@ -63,12 +63,17 @@ INJECTION_PATTERNS: list[tuple[str, str]] = [
 
     # Family 2 — Instruction Override
     (r"ignore\s+(all\s+)?(previous|prior|above|your)\s+(instructions|rules|guidelines|prompts|constraints)", "instruction_override"),
-    (r"disregard\s+(your|all|previous|the)\s+(instructions|guidelines|rules|training)", "instruction_override"),
+    (r"disregard\s+(your|all|previous|prior|the)\s+(instructions|guidelines|rules|training)", "instruction_override"),
     (r"forget\s+(everything|all|your\s+(instructions|training|guidelines))", "instruction_override"),
+    (r"(?:do\s+not|don't)\s+follow\s+(?:earlier|previous|prior)\s+(?:instructions|rules|guidelines)", "instruction_override"),
+    (r"ignore\s+(?:the\s+)?system\s+(?:message|prompt|instructions)", "instruction_override"),
+    (r"override\s+(?:your\s+)?(?:instructions|rules|policies)", "instruction_override"),
+    (r"system\s+override\s*:", "instruction_override"),
     (r"(your\s+)?(new|updated)\s+(instructions|directive|rules|guidelines)\s+(are|is|override)", "instruction_override"),
 
     # Family 3 — System Prompt Extraction
     (r"(print|show|display|reveal|output|repeat|tell\s+me)\s+(your\s+)?(system\s+prompt|initial\s+prompt|original\s+instructions|hidden\s+instructions|configuration)", "system_prompt_extraction"),
+    (r"reveal\s+(?:your\s+)?hidden\s+prompt", "system_prompt_extraction"),
     (r"what\s+(are\s+)?(your|the)\s+(instructions|system\s+prompt|guidelines|directives)\s+(you\s+were\s+given)?", "system_prompt_extraction"),
     (r"(repeat|output|print)\s+(everything|all\s+text)\s+(above|before|prior)", "system_prompt_extraction"),
 
@@ -85,7 +90,9 @@ INJECTION_PATTERNS: list[tuple[str, str]] = [
     # Family 6 — Jailbreak Patterns
     (r"\bdan\b.{0,20}(mode|activated|now|prompt)", "jailbreak"),
     (r"do\s+anything\s+now", "jailbreak"),
-    (r"(jailbreak|bypass|circumvent|override)\s+(your\s+)?(safety|filter|restriction|guideline|policy)", "jailbreak"),
+    (r"(jailbreak|bypass|circumvent|override)\s+(your\s+)?(safety|filter|restriction|guideline|policy)(?:\s+(?:controls?|filters?))?", "jailbreak"),
+    (r"pretend\s+(?:there\s+are|you\s+have)\s+no\s+(?:rules|restrictions|policies)", "jailbreak"),
+    (r"ignore\s+confidentiality\s+rules", "data_exfiltration"),
 ]
 
 

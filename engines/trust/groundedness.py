@@ -85,6 +85,11 @@ GROUNDEDNESS_THRESHOLDS: dict[str, float] = {
 
 DEFAULT_THRESHOLD = 0.55
 
+# Evidence within this similarity distance is treated as comparably relevant.
+# Conflicting, comparably relevant evidence is uncertainty, never a confident
+# contradiction or support verdict.
+EVIDENCE_CONFLICT_MARGIN = 0.05
+
 # Module-level singletons — initialized once at startup
 _embedding_model: Optional[SentenceTransformer] = None
 _qdrant_client: Optional[QdrantClient] = None
@@ -419,7 +424,7 @@ def _polarity_markers(text: str) -> dict[str, int]:
         ),
         "eligibility": (r"\b(?:not eligible|ineligible)\b", r"\beligible\b"),
         "requirement": (r"\bnot required\b", r"\brequired\b"),
-        "availability": (r"\b(?:disabled|not enabled)\b", r"\benabled\b"),
+        "availability": (r"\b(?:disabled|not enabled|not available|unavailable)\b", r"\b(?:enabled|available)\b"),
         "approval": (r"\b(?:not approved|prohibited)\b", r"\bapproved\b"),
         "direction": (r"\b(?:decrease|decreased|decline|declined)\b", r"\b(?:increase|increased|growth|grew)\b"),
     }
@@ -431,26 +436,17 @@ def _polarity_markers(text: str) -> dict[str, int]:
     return categories
 
 
-def evaluate_claim(
+def _evaluate_candidate(
     claim: str,
-    search_results: list[dict],
+    candidate: dict,
     threshold: float,
 ) -> ClaimEvaluation:
-    """Classify one claim from retrieved local evidence deterministically."""
-    if not search_results:
-        return ClaimEvaluation(
-            claim_text=claim,
-            verdict=GroundednessVerdict.INSUFFICIENT_EVIDENCE,
-            similarity_score=0.0,
-            reason="No relevant local evidence was retrieved.",
-        )
-
-    best = search_results[0]
-    similarity = max(0.0, min(1.0, float(best.get("score", 0.0))))
+    """Classify a claim against one retrieved candidate."""
+    similarity = max(0.0, min(1.0, float(candidate.get("score", 0.0))))
     source = {
-        "source_doc_id": str(best.get("doc_id", "")) or None,
-        "source_title": str(best.get("title", "")) or None,
-        "source_excerpt": str(best.get("content", ""))[:500] or None,
+        "source_doc_id": str(candidate.get("doc_id", "")) or None,
+        "source_title": str(candidate.get("title", "")) or None,
+        "source_excerpt": str(candidate.get("content", ""))[:500] or None,
     }
     if similarity < threshold:
         return ClaimEvaluation(
@@ -464,7 +460,7 @@ def evaluate_claim(
             **source,
         )
 
-    source_text = str(best.get("content", ""))
+    source_text = str(candidate.get("content", ""))
     claim_numbers = _extract_numbers(claim)
     source_numbers = _extract_numbers(source_text)
     unmatched_numbers = [
@@ -531,6 +527,81 @@ def evaluate_claim(
         reason="Relevant local evidence supports the claim with compatible values.",
         **source,
     )
+
+
+def evaluate_claim(
+    claim: str,
+    search_results: list[dict],
+    threshold: float,
+) -> ClaimEvaluation:
+    """Classify one claim using all retrieved top-k local evidence.
+
+    Retrieval rank alone does not decide the verdict. The strongest supporting
+    and contradicting candidates compete by similarity, while similarly strong
+    conflict is reported as insufficient evidence.
+    """
+    if not search_results:
+        return ClaimEvaluation(
+            claim_text=claim,
+            verdict=GroundednessVerdict.INSUFFICIENT_EVIDENCE,
+            similarity_score=0.0,
+            reason="No relevant local evidence was retrieved.",
+        )
+
+    evaluations = [
+        _evaluate_candidate(claim, candidate, threshold)
+        for candidate in search_results
+    ]
+    supports = [
+        item for item in evaluations
+        if item.verdict == GroundednessVerdict.SUPPORTED
+    ]
+    contradictions = [
+        item for item in evaluations
+        if item.verdict == GroundednessVerdict.CONTRADICTED
+    ]
+    strongest_support = max(supports, key=lambda item: item.similarity_score, default=None)
+    strongest_contradiction = max(
+        contradictions, key=lambda item: item.similarity_score, default=None
+    )
+
+    if strongest_support and strongest_contradiction:
+        difference = strongest_support.similarity_score - strongest_contradiction.similarity_score
+        if abs(difference) <= EVIDENCE_CONFLICT_MARGIN:
+            return ClaimEvaluation(
+                claim_text=claim,
+                verdict=GroundednessVerdict.INSUFFICIENT_EVIDENCE,
+                similarity_score=max(
+                    strongest_support.similarity_score,
+                    strongest_contradiction.similarity_score,
+                ),
+                source_doc_id=strongest_support.source_doc_id,
+                source_title=strongest_support.source_title,
+                source_excerpt=strongest_support.source_excerpt,
+                reason=(
+                    "Comparably strong local evidence both supports and contradicts "
+                    "the claim; review or more evidence is required."
+                ),
+            )
+        if difference > 0:
+            return strongest_support.model_copy(update={
+                "reason": (
+                    "The strongest local evidence supports the claim and is more "
+                    "relevant than the contradicting candidate."
+                )
+            })
+        return strongest_contradiction.model_copy(update={
+            "reason": (
+                "The strongest local evidence contradicts the claim and no equally "
+                "strong or stronger supporting evidence was retrieved."
+            )
+        })
+
+    if strongest_support:
+        return strongest_support
+    if strongest_contradiction:
+        return strongest_contradiction
+    return max(evaluations, key=lambda item: item.similarity_score)
 
 
 def aggregate_verdict(evaluations: list[ClaimEvaluation]) -> GroundednessVerdict:
