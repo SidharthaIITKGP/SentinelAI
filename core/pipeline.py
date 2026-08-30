@@ -47,6 +47,11 @@ from api.schemas import (
 
 logger = logging.getLogger("sentinelai")
 
+ROUTING_FAILURE_MESSAGE = (
+    "SentinelAI could not find an approved model that satisfies the required "
+    "safety and capability constraints. This request requires review."
+)
+
 
 # ── Sidhartha's own engine modules (stubbed until Day 2) ──────────────────────
 try:
@@ -106,12 +111,16 @@ except ImportError:
 try:
     from engines.efficiency.model_router import (
         evaluate_efficiency,
+        hard_routing_failures,
+        has_hard_routing_failure,
         route_model,
         routing_from_model_config,
     )
 except ImportError:
     route_model = None
     evaluate_efficiency = None
+    hard_routing_failures = None
+    has_hard_routing_failure = None
     routing_from_model_config = None
     logger.warning("model_router not found — stubbed (Gaurav's module)")
 
@@ -675,6 +684,105 @@ async def run_pipeline(
         if routing_from_model_config is not None
         else None
     )
+
+    # A fallback candidate is observable but is not approved when any hard
+    # routing constraint failed. Fail closed before any generation provider call.
+    if (
+        routing_result is not None
+        and has_hard_routing_failure is not None
+        and has_hard_routing_failure(routing_result)
+    ):
+        hard_failures = hard_routing_failures(routing_result)
+        hard_failure_values = [
+            str(getattr(constraint, "value", constraint))
+            for constraint in hard_failures
+        ]
+        all_unmet_values = [
+            str(getattr(constraint, "value", constraint))
+            for constraint in routing_result.unmet_constraints
+        ]
+        efficiency_result = (
+            evaluate_efficiency(routing_result, generation_performed=False)
+            if evaluate_efficiency is not None
+            else None
+        )
+        routing_evidence = {
+            "routing_failure": True,
+            "candidate_approved_for_generation": False,
+            "selected_model": routing_result.selected_model,
+            "selected_profile_id": routing_result.selected_profile_id,
+            "selected_tier": routing_result.selected_tier,
+            "unmet_hard_constraints": hard_failure_values,
+            "unmet_constraints": all_unmet_values,
+            "routing_reason": routing_result.routing_reason,
+            "use_case": use_case_str,
+            "risk_level": preliminary_risk_level,
+            "capability_required": routing_result.capability_required,
+            "capability_available": routing_result.capability_selected,
+            "estimated_input_tokens": routing_result.estimated_input_tokens,
+            "estimated_output_tokens": routing_result.estimated_output_tokens,
+            "estimated_total_tokens": (
+                routing_result.estimated_input_tokens
+                + routing_result.estimated_output_tokens
+            ),
+            "candidate_context_window": routing_result.context_window_selected,
+            "estimated_generation_cost_usd": 0.0,
+        }
+        if efficiency_result is not None:
+            routing_evidence["efficiency"] = efficiency_result.model_dump()
+
+        action_result = ActionResult(
+            action=ActionType.ESCALATE,
+            final_response=ROUTING_FAILURE_MESSAGE,
+            original_response="",
+            explanation=(
+                "The router identified a best-available candidate, but it was not "
+                "approved for generation because hard constraints were unmet."
+            ),
+            evidence=routing_evidence,
+            escalation_required=True,
+        )
+        risk_score = _mock_risk_score(request.use_case, preliminary_risk_level)
+        policy_decision = PolicyDecision(
+            approved=False,
+            final_action=ActionType.ESCALATE,
+            reason="Hard routing constraints failed before generation.",
+            policy_file="policy/routing_preflight",
+            threshold_applied=0.0,
+            policy_rule_ids=["routing_hard_constraint_failure"],
+        )
+        step_latencies["route"] = int((time.time() - step_start) * 1000)
+        step_latencies["generate"] = 0
+        step_latencies["evaluate"] = 0
+        step_latencies["act"] = 0
+        total_latency_ms = max(1, int((time.time() - pipeline_start) * 1000))
+        step_latencies["total"] = total_latency_ms
+        audit_entry = _build_audit_entry(
+            request_id=request_id,
+            request=request,
+            llm_response="",
+            action_result=action_result,
+            injection_result=injection_result,
+            pii_prompt_result=pii_prompt_result,
+            pii_response_result=_mock_pii_result("response"),
+            groundedness_result=_mock_groundedness_result(request.use_case),
+            bias_result=_mock_bias_result(),
+            risk_score=risk_score,
+            policy_decision=policy_decision,
+            model_used="none",
+            tokens_input=0,
+            tokens_output=0,
+            latency_ms=total_latency_ms,
+            step_latencies=step_latencies,
+            efficiency_result=efficiency_result,
+        )
+        logger.warning(
+            "[%s] Generation blocked by hard routing constraints | candidate=%s | failures=%s",
+            request_id,
+            routing_result.selected_model,
+            hard_failure_values,
+        )
+        return action_result, audit_entry
 
     # LLM call
     llm_response, tokens_input, tokens_output = await _call_llm(

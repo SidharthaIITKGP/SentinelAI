@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -39,6 +40,57 @@ def _profiles() -> list[ModelProfile]:
 
 def _profile(profile_id: str) -> ModelProfile:
     return next(profile for profile in _profiles() if profile.id == profile_id)
+
+
+def _patch_pipeline_for_routing(
+    monkeypatch,
+    llm_mock: AsyncMock,
+    risk_level: RiskLevel,
+) -> None:
+    async def clean_injection(prompt: str):
+        return InjectionResult(detected=False)
+
+    async def clean_pii(text: str, scan_target: str = "prompt"):
+        return PIIResult(found=False, scan_target=scan_target)
+
+    async def clean_bias(text: str):
+        return BiasResult(detected=False)
+
+    async def supported(response: str, use_case: UseCase):
+        return GroundednessResult(
+            verdict=GroundednessVerdict.SUPPORTED,
+            score=1.0,
+            total_claims_checked=1,
+            grounded_claims_count=1,
+            use_case_kb_used=use_case,
+        )
+
+    async def allow_policy(**kwargs):
+        return PolicyDecision(
+            approved=True,
+            final_action=ActionType.ALLOW,
+            reason="clean",
+            policy_file="tests/policy",
+            threshold_applied=0.2,
+        )
+
+    monkeypatch.setattr(pipeline, "injection_scan", clean_injection)
+    monkeypatch.setattr(pipeline, "detect_pii", clean_pii)
+    monkeypatch.setattr(pipeline, "detect_bias", clean_bias)
+    monkeypatch.setattr(pipeline, "scan_toxic_content", None)
+    monkeypatch.setattr(pipeline, "groundedness_check", supported)
+    monkeypatch.setattr(pipeline, "_call_llm", llm_mock)
+    monkeypatch.setattr(pipeline, "evaluate_policy", allow_policy)
+    monkeypatch.setattr(pipeline, "_classify_risk", lambda **kwargs: risk_level)
+
+
+def _request(use_case: UseCase) -> InterceptRequest:
+    return InterceptRequest(
+        prompt="Review this request safely.",
+        use_case=use_case,
+        tenant_id="tenant-routing-correction",
+        user_id="user-routing-correction",
+    )
 
 
 def test_registry_has_three_materially_distinct_estimated_tiers() -> None:
@@ -125,7 +177,8 @@ def test_tight_latency_high_risk_records_breach_instead_of_downgrade() -> None:
     )
     assert result.selected_tier == ModelTier.PREMIUM
     assert result.latency_budget_breached is True
-    assert "latency_budget" in result.constraints_unmet
+    assert "latency_budget" in result.unmet_constraints
+    assert result.generation_approved is True
 
 
 @pytest.mark.parametrize(
@@ -289,7 +342,9 @@ def test_impossible_latency_and_context_preserve_capability_and_report_both() ->
     assert result.selected_tier == ModelTier.PREMIUM
     assert result.capability_requirement_met
     assert result.context_window_sufficient is False
-    assert {"context_window", "latency_budget"}.issubset(result.constraints_unmet)
+    assert {"context_window", "latency_budget"}.issubset(result.unmet_constraints)
+    assert result.generation_approved is False
+    assert result.routing_failure is True
 
 
 def test_under_capable_economy_scores_worse_on_model_fit() -> None:
@@ -306,9 +361,10 @@ def test_under_capable_economy_scores_worse_on_model_fit() -> None:
     efficiency = evaluate_efficiency(route)
     assert route.selected_tier == ModelTier.ECONOMY
     assert route.capability_requirement_met is False
+    assert route.generation_approved is False
     assert efficiency.model_fit_score < 1.0
     assert efficiency.overall_efficiency_score < 0.5
-    assert "capability_requirement" in route.constraints_unmet
+    assert "capability_requirement" in route.unmet_constraints
 
 
 def test_efficiency_uses_actual_latency_without_relabeling_estimates_as_actual_cost() -> None:
@@ -405,3 +461,131 @@ def test_pipeline_exposes_efficiency_without_extra_generation_call(monkeypatch) 
     assert audit.efficiency.selected_tier == ModelTier.ECONOMY
     assert audit.estimated_cost_usd == audit.efficiency.estimated_cost_usd
     assert action.evidence["efficiency"]["selected_tier"] == ModelTier.ECONOMY
+
+
+def test_high_finance_with_only_economy_escalates_without_generation(monkeypatch) -> None:
+    profiles = _profiles()
+    for profile in profiles:
+        profile.enabled = profile.id == "economy"
+
+    def unsafe_route(risk, use_case, prompt, *, latency_budget_ms=None):
+        return route_model(
+            RiskLevel.HIGH,
+            UseCase.FINANCE_TOOL,
+            prompt,
+            profiles=profiles,
+        )
+
+    llm = AsyncMock(return_value=("unsafe generated content", 99, 88))
+    _patch_pipeline_for_routing(monkeypatch, llm, RiskLevel.HIGH)
+    monkeypatch.setattr(pipeline, "route_model", unsafe_route)
+
+    action, audit = asyncio.run(pipeline.run_pipeline(_request(UseCase.FINANCE_TOOL)))
+
+    llm.assert_not_called()
+    assert action.action == ActionType.ESCALATE
+    assert action.final_response == pipeline.ROUTING_FAILURE_MESSAGE
+    assert "unsafe generated content" not in action.final_response
+    assert action.original_response == ""
+    assert audit.llm_response == ""
+    assert audit.tokens_input == audit.tokens_output == audit.tokens_total == 0
+    assert audit.estimated_cost_usd == 0.0
+    assert audit.model_used == "none"
+    assert audit.action.evidence["routing_failure"] is True
+    assert audit.action.evidence["candidate_approved_for_generation"] is False
+    assert {
+        "capability_requirement",
+        "risk_policy",
+        "use_case_support",
+    }.issubset(audit.action.evidence["unmet_hard_constraints"])
+
+
+def test_high_hr_with_under_capable_models_escalates_without_generation(monkeypatch) -> None:
+    profiles = _profiles()
+    next(profile for profile in profiles if profile.id == "premium").enabled = False
+
+    def unsafe_route(risk, use_case, prompt, *, latency_budget_ms=None):
+        return route_model(
+            RiskLevel.HIGH,
+            UseCase.HR_COPILOT,
+            prompt,
+            profiles=profiles,
+        )
+
+    llm = AsyncMock(return_value=("unapproved HR content", 10, 10))
+    _patch_pipeline_for_routing(monkeypatch, llm, RiskLevel.HIGH)
+    monkeypatch.setattr(pipeline, "route_model", unsafe_route)
+
+    action, audit = asyncio.run(pipeline.run_pipeline(_request(UseCase.HR_COPILOT)))
+
+    llm.assert_not_called()
+    assert action.action == ActionType.ESCALATE
+    assert audit.action.evidence["selected_tier"] == ModelTier.STANDARD
+    assert {"risk_policy", "capability_requirement"}.issubset(
+        audit.action.evidence["unmet_hard_constraints"]
+    )
+
+
+def test_context_too_large_for_every_model_escalates_without_generation(monkeypatch) -> None:
+    def impossible_context_route(risk, use_case, prompt, *, latency_budget_ms=None):
+        return route_model(
+            RiskLevel.LOW,
+            UseCase.CUSTOMER_CHATBOT,
+            prompt,
+            estimated_input_tokens=140_000,
+            estimated_output_tokens=1_000,
+        )
+
+    llm = AsyncMock(return_value=("context overflow content", 1, 1))
+    _patch_pipeline_for_routing(monkeypatch, llm, RiskLevel.LOW)
+    monkeypatch.setattr(pipeline, "route_model", impossible_context_route)
+
+    action, audit = asyncio.run(
+        pipeline.run_pipeline(_request(UseCase.CUSTOMER_CHATBOT))
+    )
+
+    llm.assert_not_called()
+    assert action.action == ActionType.ESCALATE
+    assert audit.action.evidence["unmet_hard_constraints"] == ["context_window"]
+    assert audit.action.evidence["estimated_total_tokens"] == 141_000
+    assert audit.action.evidence["candidate_context_window"] == 131_072
+
+
+def test_latency_only_breach_keeps_safe_premium_and_generates(monkeypatch) -> None:
+    def slow_safe_route(risk, use_case, prompt, *, latency_budget_ms=None):
+        return route_model(
+            RiskLevel.HIGH,
+            UseCase.FINANCE_TOOL,
+            prompt,
+            latency_budget_ms=100,
+        )
+
+    llm = AsyncMock(return_value=("approved premium response", 7, 5))
+    _patch_pipeline_for_routing(monkeypatch, llm, RiskLevel.HIGH)
+    monkeypatch.setattr(pipeline, "route_model", slow_safe_route)
+
+    action, audit = asyncio.run(pipeline.run_pipeline(_request(UseCase.FINANCE_TOOL)))
+
+    llm.assert_awaited_once()
+    assert action.action == ActionType.ALLOW
+    assert action.final_response == "approved premium response"
+    assert audit.efficiency.selected_tier == ModelTier.PREMIUM
+    assert audit.efficiency.latency_budget_breached is True
+    assert audit.efficiency.generation_performed is True
+    assert audit.tokens_total == 12
+
+
+def test_all_hard_constraints_satisfied_preserves_normal_generation(monkeypatch) -> None:
+    llm = AsyncMock(return_value=("normal governed response", 4, 3))
+    _patch_pipeline_for_routing(monkeypatch, llm, RiskLevel.LOW)
+
+    action, audit = asyncio.run(
+        pipeline.run_pipeline(_request(UseCase.CUSTOMER_CHATBOT))
+    )
+
+    llm.assert_awaited_once()
+    assert action.action == ActionType.ALLOW
+    assert action.final_response == "normal governed response"
+    assert audit.efficiency.selected_tier == ModelTier.ECONOMY
+    assert audit.efficiency.generation_performed is True
+    assert audit.action.evidence["efficiency"]["generation_performed"] is True

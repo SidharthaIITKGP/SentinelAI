@@ -582,9 +582,83 @@ EfficiencyResult without beginning Phase 4 work.
 - The preliminary risk classifier remains the existing Phase 1 classifier, and
   the router correctly treats its output as authoritative input.
 
+### Phase 3 post-review correction
+
+#### Issue found
+
+The Phase 3 router correctly reported hard constraint failures but still returned
+its highest-capability fallback candidate. The pipeline did not distinguish that
+observable candidate from an approved generation route, so it could call the LLM
+when capability, risk policy, context window, or use-case support was unmet.
+
+#### Exact files modified
+
+- `api/schemas.py`
+- `core/pipeline.py`
+- `engines/efficiency/model_router.py`
+- `tests/test_phase3_efficiency_routing.py`
+- `phase.md`
+- `PHASE_HISTORY.md`
+
+#### Corrected constraint semantics and preflight behavior
+
+- Added typed `RoutingConstraint` values and centralized
+  `HARD_ROUTING_CONSTRAINTS`. Capability requirement, risk policy, context window,
+  and use-case support are hard. Latency budget is the only soft constraint.
+- `RoutingResult` now exposes canonical `unmet_constraints`,
+  `generation_approved`, `routing_failure`, and the selected candidate's context
+  window. The old `constraints_unmet` accessor remains as a compatibility alias.
+- `hard_routing_failures()` and `has_hard_routing_failure()` are the reusable
+  source of constraint classification; the pipeline contains no duplicated hard
+  constraint string set.
+- After routing and before `_call_llm`, the pipeline fails closed on any hard
+  failure. It does not contact a generation provider, returns ESCALATE with a
+  fixed holding response, leaves the internal LLM response empty, and records
+  zero input/output tokens and zero estimated generation cost.
+- Audit/action evidence separates the router's best available candidate from
+  approval to generate. It includes routing failure, candidate model/profile/tier,
+  `candidate_approved_for_generation=false`, hard and complete unmet constraints,
+  reason, use case, risk, required/available capability, estimated token totals,
+  selected context window, and zero generation cost. `model_used` is `none`.
+- A latency-only breach leaves `generation_approved=true`: the safe model still
+  generates, the breach remains recorded, and capability is not downgraded.
+- `EfficiencyResult.generation_performed` distinguishes a projected routing
+  candidate from an actual generation. Blocked preflight cost and savings are
+  reported as zero rather than implying provider spend.
+
+#### Tests added or changed
+
+- Added HIGH finance with only ECONOMY enabled: LLM mock not called, ESCALATE,
+  non-leaking holding response, empty LLM record, zero tokens/cost, and complete
+  hard-failure audit evidence.
+- Added HIGH HR with only under-capable enabled routes: LLM mock not called and
+  risk/capability failures audited.
+- Added all-model context overflow: LLM mock not called, context failure audited,
+  and ESCALATE returned.
+- Added latency-only HIGH finance: PREMIUM remains selected, generation occurs,
+  latency breach is recorded, and no unsafe downgrade occurs.
+- Added all-hard-constraints-satisfied regression: normal ECONOMY generation and
+  efficiency evidence remain unchanged.
+- Strengthened earlier impossible/under-capable and latency tests to assert the
+  canonical approval/failure semantics. Phase 3 now contains 37 cases.
+
+#### Exact correction verification results
+
+- Before correction: compile exit `0`; full suite
+  `236 passed, 24 warnings in 12.47s`.
+- Final `.venv/bin/python -m compileall -q .`: exit `0`, no output.
+- Final Phase 3: `37 passed, 3 warnings in 7.19s`.
+- Final Phase 1: `21 passed, 18 warnings in 7.15s`.
+- Final Phase 2: `13 passed, 6 warnings in 6.97s`.
+- Final full suite: `241 passed, 27 warnings in 12.82s`.
+- All warnings are the existing Pydantic exposure of `datetime.utcnow()`
+  deprecation; no test failed or was skipped.
+
 ### Phase 4 must preserve
 
 - Capability-first filtering and explicit unmet-constraint reporting.
+- Hard routing failures must remain a pre-generation ESCALATE with no provider
+  call; latency-only breaches must remain eligible for safe generation.
 - Estimated-versus-actual labeling and deterministic cost arithmetic.
 - All three materially different routes and the no-extra-classification-call rule.
 - Phase 1 fail-safe actions/risk boundaries and Phase 2 one-call/one-recheck repair.

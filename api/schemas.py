@@ -69,6 +69,15 @@ class ComplexityLevel(str, Enum):
     HIGH = "HIGH"
 
 
+class RoutingConstraint(str, Enum):
+    """Named model-routing constraints recorded in routing evidence."""
+    CAPABILITY_REQUIREMENT = "capability_requirement"
+    RISK_POLICY = "risk_policy"
+    CONTEXT_WINDOW = "context_window"
+    USE_CASE_SUPPORT = "use_case_support"
+    LATENCY_BUDGET = "latency_budget"
+
+
 class BiasType(str, Enum):
     """Categories of bias the bias detector can identify."""
     GENDER_BIAS = "gender_bias"
@@ -301,14 +310,26 @@ class RoutingResult(ModelConfig):
     capability_selected: float = Field(..., ge=0.0, le=1.0)
     capability_requirement_met: bool
     context_window_sufficient: bool
-    constraints_unmet: List[str] = Field(default_factory=list)
+    context_window_selected: int = Field(..., gt=0)
+    unmet_constraints: List[RoutingConstraint] = Field(default_factory=list)
+    generation_approved: bool = True
+    routing_failure: bool = False
     profile_values_are_estimated: bool = True
 
     @model_validator(mode="after")
     def selected_model_matches_generation_model(self):
         if self.model != self.selected_model:
             raise ValueError("model must match selected_model")
+        if self.routing_failure == self.generation_approved:
+            raise ValueError(
+                "routing_failure must be the inverse of generation_approved"
+            )
         return self
+
+    @property
+    def constraints_unmet(self) -> List[RoutingConstraint]:
+        """Backward-compatible alias for the Phase 3 field name."""
+        return self.unmet_constraints
 
 
 class EfficiencyResult(BaseModel):
@@ -334,6 +355,7 @@ class EfficiencyResult(BaseModel):
     capability_selected: float = Field(..., ge=0.0, le=1.0)
     capability_requirement_met: bool
     retry_count: int = Field(default=0, ge=0)
+    generation_performed: bool = True
     explanation: List[str] = Field(default_factory=list)
     values_are_estimated: bool = True
 
@@ -1210,7 +1232,7 @@ class HealthResponse(BaseModel):
 
 ALL_SCHEMAS = [
     # Enums
-    "UseCase", "RiskLevel", "ActionType", "ModelTier", "ComplexityLevel", "BiasType", "ProtectedDimension", "BiasBehavior", "LLMBiasJudgment", "PIIEntityType", "SecretType",
+    "UseCase", "RiskLevel", "ActionType", "ModelTier", "ComplexityLevel", "RoutingConstraint", "BiasType", "ProtectedDimension", "BiasBehavior", "LLMBiasJudgment", "PIIEntityType", "SecretType",
     "ConfidentialCategory",
     # Sub-models
     "PIIEntity", "FlaggedClaim", "SupportingSource", "ModelConfig", "ModelProfile", "ComplexityAssessment", "RoutingResult", "EfficiencyResult",

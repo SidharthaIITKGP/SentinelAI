@@ -239,3 +239,91 @@ route-owned single audit persistence, and every Phase 1–3 regression. Escalate
 original content must remain internal when authorized review access is added.
 
 **Next phase:** Phase 4 — Human Review and Feedback Loop.
+
+## 2026-08-30 — Phase 3 post-review correction COMPLETE
+
+### Issue and scope
+
+Review found that `route_model()` could return a best-available candidate with
+unmet capability, risk-policy, context-window, or use-case constraints, and the
+pipeline could still send that candidate to `_call_llm`. This correction changes
+only Phase 3 routing preflight behavior. Phase 4 was not started.
+
+Modified:
+
+- `api/schemas.py`
+- `core/pipeline.py`
+- `engines/efficiency/model_router.py`
+- `tests/test_phase3_efficiency_routing.py`
+- `phase.md`
+- `PHASE_HISTORY.md`
+
+### Implementation
+
+`RoutingConstraint` now gives constraints typed names. The centralized hard set
+contains `capability_requirement`, `risk_policy`, `context_window`, and
+`use_case_support`; `latency_budget` is soft. `hard_routing_failures()` and
+`has_hard_routing_failure()` are the only classification helpers.
+
+`RoutingResult` now records canonical `unmet_constraints`,
+`generation_approved`, `routing_failure`, and selected context capacity. A
+compatibility property retains the original `constraints_unmet` accessor. The
+router still returns its best candidate for observability, but any hard failure
+sets generation approval false. Latency alone does not.
+
+Immediately after routing, the pipeline checks the centralized helper. For a hard
+failure it returns an ESCALATE holding response before any provider call, records
+an empty LLM response, zero generation tokens, zero generation cost, and
+`model_used=none`. Evidence names the fallback candidate while explicitly
+recording `candidate_approved_for_generation=false`, all hard/full constraints,
+routing reason, use case, risk, capability, token estimate, and context capacity.
+The route-owned audit behavior remains unchanged.
+
+`EfficiencyResult.generation_performed` differentiates projected candidates from
+real calls. A blocked preflight uses zero estimated generation cost/savings. A
+safe latency-only breach proceeds using the capable model and retains the breach
+evidence; safety/capability remains more important than latency.
+
+### Tests and exact results
+
+Five product-level pipeline cases were added with `AsyncMock` provider-call
+assertions:
+
+- HIGH finance with only ECONOMY enabled does not call the LLM and escalates.
+- HIGH HR with under-capable models does not call the LLM and escalates.
+- Context larger than every enabled model does not call the LLM and escalates.
+- A safe PREMIUM latency-only breach still calls the LLM without downgrade.
+- A fully satisfied LOW route preserves normal generation.
+
+Earlier route tests now assert approval/failure semantics for under-capability,
+impossible context, and latency-only cases. Phase 3 contains 37 cases after the
+correction.
+
+Baseline before correction:
+
+- `.venv/bin/python -m compileall -q .`: exit `0`, no output.
+- `.venv/bin/pytest -q`: `236 passed, 24 warnings in 12.47s`.
+
+Final required verification:
+
+- `.venv/bin/python -m compileall -q .`: exit `0`, no output.
+- `.venv/bin/pytest -q tests/test_phase3_efficiency_routing.py`:
+  `37 passed, 3 warnings in 7.19s`.
+- `.venv/bin/pytest -q tests/test_phase1_governance.py`:
+  `21 passed, 18 warnings in 7.15s`.
+- `.venv/bin/pytest -q tests/test_phase2_groundedness_repair.py`:
+  `13 passed, 6 warnings in 6.97s`.
+- `.venv/bin/pytest -q`: `241 passed, 27 warnings in 12.82s`.
+
+Warnings remain the existing Pydantic exposure of `datetime.utcnow()`
+deprecation. No tests failed or were skipped.
+
+### Preservation contract
+
+Phase 4 must preserve the hard/soft split, pre-generation fail-closed behavior,
+empty/non-leaking LLM record, zero call tokens/cost on routing failure, explicit
+candidate-versus-approval audit evidence, safe latency-only generation, Phase 1
+actions and risk thresholds, Phase 2 bounded repair, and every Phase 1–3 test.
+
+**Current phase:** Phase 3 — COMPLETE
+**Next phase:** Phase 4 — Human Review and Feedback Loop (not started).

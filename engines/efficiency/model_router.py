@@ -16,6 +16,7 @@ from api.schemas import (
     ModelProfile,
     ModelTier,
     RiskLevel,
+    RoutingConstraint,
     RoutingResult,
     UseCase,
 )
@@ -28,6 +29,31 @@ TIER_ORDER = {
     ModelTier.STANDARD: 1,
     ModelTier.PREMIUM: 2,
 }
+HARD_ROUTING_CONSTRAINTS = frozenset(
+    {
+        RoutingConstraint.CAPABILITY_REQUIREMENT,
+        RoutingConstraint.RISK_POLICY,
+        RoutingConstraint.CONTEXT_WINDOW,
+        RoutingConstraint.USE_CASE_SUPPORT,
+    }
+)
+SOFT_ROUTING_CONSTRAINTS = frozenset({RoutingConstraint.LATENCY_BUDGET})
+
+
+def hard_routing_failures(
+    routing: RoutingResult,
+) -> list[RoutingConstraint]:
+    """Return hard failures while preserving the router's evidence order."""
+    return [
+        RoutingConstraint(constraint)
+        for constraint in routing.unmet_constraints
+        if RoutingConstraint(constraint) in HARD_ROUTING_CONSTRAINTS
+    ]
+
+
+def has_hard_routing_failure(routing: RoutingResult) -> bool:
+    """Return True when a best-available candidate is unsafe to generate with."""
+    return bool(hard_routing_failures(routing))
 
 
 def _normalize_risk(risk_level: RiskLevel | str) -> RiskLevel:
@@ -275,7 +301,7 @@ def route_model(
     within_budget = [
         profile for profile in safe_candidates if profile.expected_latency_ms <= budget
     ]
-    constraints_unmet: list[str] = []
+    unmet_constraints: list[RoutingConstraint] = []
 
     def projected_cost(profile: ModelProfile) -> float:
         return calculate_estimated_cost(profile, input_tokens, output_tokens)
@@ -298,7 +324,7 @@ def route_model(
             safe_candidates,
             key=lambda profile: (profile.expected_latency_ms, projected_cost(profile)),
         )
-        constraints_unmet.append("latency_budget")
+        unmet_constraints.append(RoutingConstraint.LATENCY_BUDGET)
         reason = (
             "No safe model meets the latency budget; capability and policy were "
             "preserved, so the latency breach is explicit."
@@ -311,7 +337,7 @@ def route_model(
         ]
         if not eligible:
             eligible = [profile for profile in profiles if profile.enabled]
-            constraints_unmet.append("use_case_support")
+            unmet_constraints.append(RoutingConstraint.USE_CASE_SUPPORT)
         selected = max(
             eligible,
             key=lambda profile: (
@@ -321,13 +347,13 @@ def route_model(
             ),
         )
         if risk_level not in selected.supported_risk_levels:
-            constraints_unmet.append("risk_policy")
+            unmet_constraints.append(RoutingConstraint.RISK_POLICY)
         if selected.capability_score < required:
-            constraints_unmet.append("capability_requirement")
+            unmet_constraints.append(RoutingConstraint.CAPABILITY_REQUIREMENT)
         if total_tokens > selected.context_window:
-            constraints_unmet.append("context_window")
+            unmet_constraints.append(RoutingConstraint.CONTEXT_WINDOW)
         if selected.expected_latency_ms > budget:
-            constraints_unmet.append("latency_budget")
+            unmet_constraints.append(RoutingConstraint.LATENCY_BUDGET)
         reason = (
             "No profile satisfies every hard constraint; selected the highest-"
             "capability enabled route and reported every unmet constraint."
@@ -342,6 +368,7 @@ def route_model(
     capability_met = selected.capability_score >= required
     context_sufficient = total_tokens <= selected.context_window
     latency_breached = selected.expected_latency_ms > budget
+    hard_failure = bool(set(unmet_constraints) & HARD_ROUTING_CONSTRAINTS)
     if risk_level == RiskLevel.HIGH:
         reason += " High-risk governance forbids capability downgrade for speed or savings."
 
@@ -374,7 +401,10 @@ def route_model(
         capability_selected=selected.capability_score,
         capability_requirement_met=capability_met,
         context_window_sufficient=context_sufficient,
-        constraints_unmet=constraints_unmet,
+        context_window_selected=selected.context_window,
+        unmet_constraints=unmet_constraints,
+        generation_approved=not hard_failure,
+        routing_failure=hard_failure,
         profile_values_are_estimated=selected.estimated_profile,
     )
     logger.info(
@@ -431,6 +461,10 @@ def routing_from_model_config(
         capability_selected=1.0,
         capability_requirement_met=True,
         context_window_sufficient=True,
+        context_window_selected=131072,
+        unmet_constraints=[],
+        generation_approved=True,
+        routing_failure=False,
         profile_values_are_estimated=True,
     )
 
@@ -440,6 +474,7 @@ def evaluate_efficiency(
     *,
     actual_latency_ms: Optional[int] = None,
     retry_count: int = 0,
+    generation_performed: bool = True,
 ) -> EfficiencyResult:
     """Balance model fit, estimated cost, and latency; cheapest is not sufficient."""
     if actual_latency_ms is not None and actual_latency_ms < 0:
@@ -452,7 +487,9 @@ def evaluate_efficiency(
         if routing.capability_required > 0
         else 1.0,
     )
-    selected_cost = float(routing.estimated_cost_usd or 0.0)
+    selected_cost = (
+        float(routing.estimated_cost_usd or 0.0) if generation_performed else 0.0
+    )
     baseline_cost = routing.baseline_estimated_cost_usd
     cost_score = 1.0 if selected_cost == 0 else min(1.0, baseline_cost / selected_cost)
     latency_value = (
@@ -470,6 +507,11 @@ def evaluate_efficiency(
         or (actual_latency_ms is not None and actual_latency_ms > routing.latency_budget_ms)
     )
     explanations = [routing.routing_reason]
+    if not generation_performed:
+        explanations.append(
+            "Generation was blocked by routing preflight; estimated generation "
+            "cost is zero."
+        )
     if routing.estimated_savings_usd < 0:
         explanations.append(
             "Estimated savings are negative because governance selected a stronger "
@@ -492,8 +534,8 @@ def evaluate_efficiency(
         baseline_model=routing.baseline_model,
         estimated_cost_usd=selected_cost,
         baseline_estimated_cost_usd=baseline_cost,
-        estimated_savings_usd=routing.estimated_savings_usd,
-        estimated_savings_percent=routing.estimated_savings_percent,
+        estimated_savings_usd=(routing.estimated_savings_usd if generation_performed else 0.0),
+        estimated_savings_percent=(routing.estimated_savings_percent if generation_performed else 0.0),
         expected_latency_ms=routing.expected_latency_ms,
         actual_latency_ms=actual_latency_ms,
         latency_budget_ms=routing.latency_budget_ms,
@@ -502,6 +544,7 @@ def evaluate_efficiency(
         capability_selected=routing.capability_selected,
         capability_requirement_met=routing.capability_requirement_met,
         retry_count=retry_count,
+        generation_performed=generation_performed,
         explanation=explanations,
         values_are_estimated=routing.profile_values_are_estimated,
     )
