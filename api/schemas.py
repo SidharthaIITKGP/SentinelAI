@@ -55,6 +55,20 @@ class GroundednessVerdict(str, Enum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
+class ModelTier(str, Enum):
+    """Logical model tiers used by the deterministic efficiency router."""
+    ECONOMY = "ECONOMY"
+    STANDARD = "STANDARD"
+    PREMIUM = "PREMIUM"
+
+
+class ComplexityLevel(str, Enum):
+    """Explainable prompt-complexity bands; no LLM classification is used."""
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
 class BiasType(str, Enum):
     """Categories of bias the bias detector can identify."""
     GENDER_BIAS = "gender_bias"
@@ -233,6 +247,95 @@ class ModelConfig(BaseModel):
     estimated_cost_usd: Optional[float] = Field(
         default=None, description="Estimated cost, can be None if unknown"
     )
+
+
+class ModelProfile(BaseModel):
+    """One enabled or disabled model profile loaded from the local registry."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    id: str
+    provider_model: str
+    tier: ModelTier
+    capability_score: float = Field(..., ge=0.0, le=1.0)
+    input_cost_per_1m_tokens: float = Field(..., ge=0.0)
+    output_cost_per_1m_tokens: float = Field(..., ge=0.0)
+    expected_latency_ms: int = Field(..., gt=0)
+    context_window: int = Field(..., gt=0)
+    max_output_tokens: int = Field(..., gt=0)
+    supported_use_cases: List[UseCase]
+    supported_risk_levels: List[RiskLevel]
+    enabled: bool = True
+    estimated_profile: bool = True
+
+
+class ComplexityAssessment(BaseModel):
+    """Deterministic prompt complexity with inspectable contributing reasons."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    level: ComplexityLevel
+    score: int = Field(..., ge=0)
+    estimated_input_tokens: int = Field(..., ge=0)
+    reasons: List[str] = Field(default_factory=list)
+
+
+class RoutingResult(ModelConfig):
+    """Complete model selection, constraint, cost, and latency explanation."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    selected_model: str
+    selected_profile_id: str
+    selected_tier: ModelTier
+    baseline_model: str
+    baseline_profile_id: str
+    routing_reason: str
+    complexity: ComplexityAssessment
+    estimated_input_tokens: int = Field(..., ge=0)
+    estimated_output_tokens: int = Field(..., ge=0)
+    baseline_estimated_cost_usd: float = Field(..., ge=0.0)
+    estimated_savings_usd: float
+    estimated_savings_percent: float
+    expected_latency_ms: int = Field(..., gt=0)
+    latency_budget_ms: int = Field(..., gt=0)
+    latency_budget_breached: bool
+    capability_required: float = Field(..., ge=0.0, le=1.0)
+    capability_selected: float = Field(..., ge=0.0, le=1.0)
+    capability_requirement_met: bool
+    context_window_sufficient: bool
+    constraints_unmet: List[str] = Field(default_factory=list)
+    profile_values_are_estimated: bool = True
+
+    @model_validator(mode="after")
+    def selected_model_matches_generation_model(self):
+        if self.model != self.selected_model:
+            raise ValueError("model must match selected_model")
+        return self
+
+
+class EfficiencyResult(BaseModel):
+    """Cost, latency, and capability balance for the selected route."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    model_fit_score: float = Field(..., ge=0.0, le=1.0)
+    cost_score: float = Field(..., ge=0.0, le=1.0)
+    latency_score: float = Field(..., ge=0.0, le=1.0)
+    overall_efficiency_score: float = Field(..., ge=0.0, le=1.0)
+    selected_model: str
+    selected_tier: ModelTier
+    baseline_model: str
+    estimated_cost_usd: float = Field(..., ge=0.0)
+    baseline_estimated_cost_usd: float = Field(..., ge=0.0)
+    estimated_savings_usd: float
+    estimated_savings_percent: float
+    expected_latency_ms: int = Field(..., gt=0)
+    actual_latency_ms: Optional[int] = Field(default=None, ge=0)
+    latency_budget_ms: int = Field(..., gt=0)
+    latency_budget_breached: bool
+    capability_required: float = Field(..., ge=0.0, le=1.0)
+    capability_selected: float = Field(..., ge=0.0, le=1.0)
+    capability_requirement_met: bool
+    retry_count: int = Field(default=0, ge=0)
+    explanation: List[str] = Field(default_factory=list)
+    values_are_estimated: bool = True
 
 
 class PolicyDecision(BaseModel):
@@ -838,6 +941,10 @@ class InterceptResponse(BaseModel):
         default_factory=dict,
         description="Per-signal risk breakdown for dashboard display"
     )
+    efficiency: Optional[EfficiencyResult] = Field(
+        default=None,
+        description="Estimated routing, capability, cost, and latency evidence",
+    )
     governed: bool = Field(
         default=True, description="Always True — signals this response was governed"
     )
@@ -884,6 +991,10 @@ class AuditEntry(BaseModel):
     tokens_total: int = Field(..., description="Sum of input + output")
     estimated_cost_usd: Optional[float] = Field(
         default=None, description="Estimated API cost"
+    )
+    efficiency: Optional[EfficiencyResult] = Field(
+        default=None,
+        description="Structured model-routing and efficiency evidence",
     )
 
     # ── What was returned ──────────────────────────────────────────────────
@@ -1099,10 +1210,10 @@ class HealthResponse(BaseModel):
 
 ALL_SCHEMAS = [
     # Enums
-    "UseCase", "RiskLevel", "ActionType", "BiasType", "ProtectedDimension", "BiasBehavior", "LLMBiasJudgment", "PIIEntityType", "SecretType",
+    "UseCase", "RiskLevel", "ActionType", "ModelTier", "ComplexityLevel", "BiasType", "ProtectedDimension", "BiasBehavior", "LLMBiasJudgment", "PIIEntityType", "SecretType",
     "ConfidentialCategory",
     # Sub-models
-    "PIIEntity", "FlaggedClaim", "SupportingSource", "ModelConfig",
+    "PIIEntity", "FlaggedClaim", "SupportingSource", "ModelConfig", "ModelProfile", "ComplexityAssessment", "RoutingResult", "EfficiencyResult",
     "PolicyDecision", "PolicyEvaluationRequest", "InterceptPolicyRequest", "RiskBreakdown",
     # Engine Results
     "InjectionResult", "PIIResult", "PiiTextRequest", "PiiScanResponse",

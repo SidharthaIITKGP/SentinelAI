@@ -18,9 +18,9 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 
 ## Current Status
 
-**Current phase:** Phase 2 — COMPLETE
-**Completed phases:** Phase 1 — Governance correctness and safety; Phase 2 — Groundedness uncertainty and real repair
-**Next phase:** Phase 3 — Real Efficiency Engine and Model Routing
+**Current phase:** Phase 3 — COMPLETE
+**Completed phases:** Phase 1 — Governance correctness and safety; Phase 2 — Groundedness uncertainty and real repair; Phase 3 — Real Efficiency Engine and Model Routing
+**Next phase:** Phase 4 — Human Review and Feedback Loop
 
 ### Baseline verification observed on 2026-08-30
 
@@ -47,8 +47,8 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 ### P1 capability gaps
 
 - REPAIR was replaced in Phase 2 with one bounded, evidence-constrained attempt and a mandatory groundedness recheck.
-- Model routing currently points both default and premium routes to the same model.
-- Cost/latency/model-fit evaluation is not yet a real Efficiency Engine.
+- Phase 3 replaced same-model routing with three distinct estimated profiles and capability-first selection.
+- Phase 3 added structured cost, latency, model-fit, and overall efficiency evaluation.
 - Human review and feedback schemas exist, but there is no complete review/feedback workflow.
 - Multi-turn/session risk is not implemented.
 - Audit persistence retains raw prompt/response content by default.
@@ -436,3 +436,160 @@ bounded repair attempt without beginning Phase 3 work.
 
 **Next phase:** Phase 3 — Real Efficiency Engine and Model Routing. Do not begin
 without review/authorization.
+
+## 2026-08-30 — Phase 3 COMPLETE
+
+### Status
+
+**COMPLETE.** SentinelAI now has deterministic model routing and a real
+EfficiencyResult without beginning Phase 4 work.
+
+### Exact files created
+
+- `config/models.yaml`
+- `tests/test_phase3_efficiency_routing.py`
+
+### Exact files modified
+
+- `api/routes/intercept.py`
+- `api/schemas.py`
+- `core/pipeline.py`
+- `engines/efficiency/model_router.py`
+- `phase.md`
+- `PHASE_HISTORY.md`
+
+### Model registry design
+
+- `ECONOMY`: `groq/openai/gpt-oss-20b`, capability `0.55`, estimated input/output
+  prices `$0.075/$0.30` per 1M tokens, expected latency `220 ms`, and an
+  operational context limit of `8,192` tokens. It is approved only for LOW-risk
+  customer-chatbot traffic.
+- `STANDARD`: `groq/openai/gpt-oss-120b`, capability `0.80`, estimated prices
+  `$0.15/$0.60`, expected latency `500 ms`, and a `32,768` operational context
+  limit. It supports LOW/MEDIUM traffic across all use cases and is the baseline.
+- `PREMIUM`: `groq/qwen/qwen3.6-27b`, capability `0.96`, estimated prices
+  `$0.60/$3.00`, expected latency `850 ms`, and a `131,072` context limit. It is
+  approved for all three risk levels and use cases.
+- Every profile is explicitly marked estimated. Capability, latency, and
+  operational context limits are SentinelAI planning metadata, not benchmark
+  claims or measured provider service levels.
+
+### Complexity estimator design
+
+- Token count uses the documented deterministic approximation
+  `ceil(non-whitespace characters / 4)` and makes no LLM call.
+- The score considers exact token bands, question count, reasoning-heavy terms,
+  structured/code-like content, risk, and HR/finance sensitivity.
+- Scores `0–1`, `2–3`, and `4+` map to LOW, MEDIUM, and HIGH complexity. Reasons
+  and the estimated input tokens are retained in `ComplexityAssessment`.
+
+### Routing algorithm and latency behavior
+
+- Capability requirements start from risk, add use-case sensitivity, and apply a
+  complexity floor. Registry risk/use-case approvals are hard candidate filters.
+- Selection first removes disabled, unsupported, under-capable, and context-small
+  profiles. Among safe routes within budget, the lowest estimated request cost
+  wins; if none meet latency, the fastest safe route is selected and the breach
+  is explicit. Capability is never reduced merely for speed or savings.
+- If no route satisfies every constraint, the highest-capability enabled profile
+  is returned with every unmet constraint named. If every profile is disabled,
+  routing fails explicitly.
+- Configured default latency budgets are customer `700 ms`, HR `900 ms`, and
+  finance `1,200 ms`; a positive per-request override can be supplied through
+  request metadata.
+
+### Cost and EfficiencyResult design
+
+- Estimated cost formula:
+  `(input_tokens × input_price_per_1M + output_tokens × output_price_per_1M) / 1,000,000`.
+- Savings are `baseline estimated cost - selected estimated cost`; percentages
+  use baseline cost as the denominator and return zero when baseline cost is
+  zero. Negative savings are preserved for stronger governance routes.
+- `EfficiencyResult` exposes model fit, cost, latency, overall score, selected and
+  baseline models, estimated costs/savings, expected and observed generation
+  latency, budget breach, capabilities, retry count, and explanations.
+- Overall efficiency weights fit `50%`, cost `25%`, and latency `25%`, with a
+  capability gate that prevents cheap under-capable routes from scoring well.
+- The structured result is present in `AuditEntry`, API output, and action
+  evidence. Existing action-evidence JSON storage avoided a database migration.
+
+### Tests added and exact results
+
+- Added 32 offline Phase 3 cases covering all three tiers, short high-risk and
+  long low-risk prompts, low-latency conflicts, exact complexity/context
+  boundaries, zero/large/output-heavy token costs, zero and negative savings,
+  close model choices, disabled/all-disabled profiles, context overflow,
+  impossible constraints, under-capability scoring, actual latency breach, and
+  pipeline audit/API evidence with exactly one normal generation call.
+- Before edits: compile exit `0`; full suite
+  `204 passed, 24 warnings in 12.15s`.
+- Final `.venv/bin/python -m compileall -q .`: exit `0`, no output.
+- Final Phase 1: `21 passed, 18 warnings in 7.08s`.
+- Final Phase 2: `13 passed, 6 warnings in 7.04s`.
+- Final Phase 3: `32 passed in 7.09s`.
+- Final full suite: `236 passed, 24 warnings in 12.78s`.
+- The 24 warnings remain the existing Pydantic exposure of
+  `datetime.utcnow()` deprecation; there were no failures or skipped tests.
+
+### Test-quality self-check
+
+1. **Are the tests overly easy?** No. They include conflicting, impossible,
+   disabled-profile, exact-boundary, and adverse-cost cases.
+2. **Were expected results chosen after reading implementation branches?** No.
+   Expected outcomes follow the Phase 3 product invariants and were checked
+   against multiple registry mutations and ordering changes.
+3. **Does each tier have a required selection case?** Yes: simple LOW customer
+   selects ECONOMY, medium reasoning selects STANDARD, and HIGH HR/finance selects
+   PREMIUM.
+4. **Is cheapest intentionally wrong anywhere?** Yes. HIGH HR/finance and tight
+   latency cases require PREMIUM despite negative estimated savings.
+5. **Is premium intentionally wrong anywhere?** Yes. Simple LOW customer and long
+   but non-sensitive customer cases must choose ECONOMY/STANDARD.
+6. **Are boundaries tested?** Yes. Token thresholds and exact/one-over context
+   limits are table-driven.
+7. **Are constraints conflicting?** Yes. Tight latency plus HIGH finance preserves
+   capability and reports a breach.
+8. **Are failure/impossible cases present?** Yes. All-disabled, invalid budget,
+   under-capable-only, and context-plus-latency impossible cases are covered.
+9. **Could always-PREMIUM pass?** No. ECONOMY/STANDARD selection, savings, disabled,
+   ordering, and context cases would fail.
+10. **Could always-ECONOMY pass?** No. HIGH-risk capability, HR/finance approval,
+    medium complexity, disabled economy, and context cases would fail.
+
+### Important design decisions and assumptions
+
+- Model identifiers are distinct, currently supported Groq identifiers, while all
+  registry economics/capability/latency values remain explicitly configurable
+  estimates. SentinelAI does not label these as actual spend or measured latency.
+- STANDARD is the counterfactual baseline, so governance upgrades can truthfully
+  produce negative savings.
+- The router remains compatible with legacy two-argument router plugins and
+  ModelConfig/dict outputs.
+- Efficiency is observational in Phase 3 and does not weaken policy actions,
+  detector availability handling, risk boundaries, REDACT, ESCALATE, or bounded
+  REPAIR behavior.
+
+### Known remaining limitations
+
+- Character-based token estimation is approximate and output tokens are projected
+  from complexity; provider billing is not queried.
+- Expected latency and capability scores are simulated planning metadata. Actual
+  latency captures local route-plus-generation duration, not provider-only time.
+- Estimated initial-route cost does not yet recalculate the additional token cost
+  of a Phase 2 repair call, although repair attempts are counted.
+- Registry availability is configured, not dynamically fetched from provider
+  permissions or health APIs; model/pricing metadata may require maintenance.
+- The preliminary risk classifier remains the existing Phase 1 classifier, and
+  the router correctly treats its output as authoritative input.
+
+### Phase 4 must preserve
+
+- Capability-first filtering and explicit unmet-constraint reporting.
+- Estimated-versus-actual labeling and deterministic cost arithmetic.
+- All three materially different routes and the no-extra-classification-call rule.
+- Phase 1 fail-safe actions/risk boundaries and Phase 2 one-call/one-recheck repair.
+- Route-owned single audit persistence and all Phase 1–3 regression tests.
+- Original escalated content must remain internal when Phase 4 adds review access.
+
+**Next phase:** Phase 4 — Human Review and Feedback Loop. Do not begin without
+review/authorization.

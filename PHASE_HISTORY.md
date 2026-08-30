@@ -108,3 +108,134 @@ the complete required verification was rerun:
 - `.venv/bin/pytest -q tests/test_phase2_groundedness_repair.py`:
   `13 passed, 6 warnings in 6.91s`.
 - `.venv/bin/pytest -q`: `204 passed, 24 warnings in 12.28s`.
+
+## 2026-08-30 — Phase 3 COMPLETE
+
+### Scope and exact files
+
+Created:
+
+- `config/models.yaml`
+- `tests/test_phase3_efficiency_routing.py`
+
+Modified:
+
+- `api/routes/intercept.py`
+- `api/schemas.py`
+- `core/pipeline.py`
+- `engines/efficiency/model_router.py`
+- `phase.md`
+- `PHASE_HISTORY.md`
+
+No database schema changed. Structured efficiency data is carried by
+`AuditEntry` and persisted within the existing action-evidence JSON path.
+
+### Registry and routing implementation
+
+The local YAML registry defines distinct ECONOMY, STANDARD, and PREMIUM routes
+using `groq/openai/gpt-oss-20b`, `groq/openai/gpt-oss-120b`, and
+`groq/qwen/qwen3.6-27b`. All pricing, capability, expected-latency, and
+operational-context values are marked estimated/configurable rather than actual
+billing or benchmark measurements. STANDARD is the counterfactual baseline.
+
+The deterministic complexity estimator uses approximated input tokens, exact
+token bands, question count, reasoning terms, structured/code-like input, risk,
+and domain sensitivity. It makes no LLM call and returns LOW/MEDIUM/HIGH with
+inspectable reasons.
+
+The router derives required capability from risk, use case, and complexity. It
+filters disabled profiles, unsupported use cases/risk levels, insufficient
+capability, and inadequate context before optimizing. It selects the
+lowest-estimated-cost safe profile within latency budget. When safe candidates
+all exceed latency, it selects the fastest safe profile and reports the breach;
+safety is never downgraded for speed or savings. With impossible combined
+constraints, it returns the highest-capability enabled profile and enumerates
+unmet constraints. All-disabled configuration fails explicitly.
+
+Default estimated latency budgets are 700 ms for customer chat, 900 ms for HR,
+and 1,200 ms for finance. Positive request-level overrides are supported.
+
+### Cost and efficiency implementation
+
+Token estimation is `ceil(non-whitespace characters / 4)`. Estimated request
+cost is:
+
+`(input tokens × input price per 1M + output tokens × output price per 1M) / 1,000,000`.
+
+Savings equal baseline estimated cost minus selected estimated cost and may be
+negative when governance requires a stronger route. A zero-cost baseline yields
+zero savings percentage instead of division failure.
+
+New schemas include `ModelTier`, `ComplexityLevel`, `ModelProfile`,
+`ComplexityAssessment`, `RoutingResult`, and `EfficiencyResult`. The efficiency
+result contains model-fit, cost, latency and overall scores; selected/baseline
+models; estimated costs and savings; expected/observed latency; budget breach;
+required/selected capability; retry count; and explanations. Fit has 50% weight,
+cost and latency 25% each, plus a capability gate so cheap under-capable routes
+cannot score well.
+
+The pipeline routes before generation, evaluates efficiency without another LLM
+call, retains compatibility with legacy two-argument router plugins, exposes the
+result in API output and action evidence, and includes it in AuditEntry. Phase 2
+repair continues to reuse the routed generation path with its existing one-call,
+one-recheck bound.
+
+### Tests and test-quality audit
+
+`tests/test_phase3_efficiency_routing.py` contributes 32 offline cases. They
+cover each tier, HIGH finance/HR safety, long LOW traffic, short HIGH traffic,
+latency conflicts, token and context boundaries, zero/large/output-heavy costs,
+baseline and negative savings, close candidates with reversed registry order,
+disabled/all-disabled profiles, impossible constraints, model-fit gating, actual
+latency overrun, and pipeline audit/evidence with exactly one normal generation.
+
+The tests are not happy-path-only and were derived from product invariants. Each
+tier must win at least one case. Cheapest is deliberately wrong for HIGH HR and
+finance; PREMIUM is deliberately wasteful for simple LOW and long but
+non-sensitive traffic. Exact boundaries, conflicts, and failures are present.
+An always-PREMIUM implementation fails ECONOMY/STANDARD, savings, disabled, and
+ordering cases. An always-ECONOMY implementation fails regulated capability,
+domain approval, complexity, disabled, and context cases.
+
+### Exact verification results
+
+Before Phase 3 edits:
+
+- `.venv/bin/python -m compileall -q .`: exit `0`, no output.
+- `.venv/bin/pytest -q`: `204 passed, 24 warnings in 12.15s`.
+
+Final required verification:
+
+- `.venv/bin/python -m compileall -q .`: exit `0`, no output.
+- `.venv/bin/pytest -q tests/test_phase1_governance.py`:
+  `21 passed, 18 warnings in 7.08s`.
+- `.venv/bin/pytest -q tests/test_phase2_groundedness_repair.py`:
+  `13 passed, 6 warnings in 7.04s`.
+- `.venv/bin/pytest -q tests/test_phase3_efficiency_routing.py`:
+  `32 passed in 7.09s`.
+- `.venv/bin/pytest -q`: `236 passed, 24 warnings in 12.78s`.
+
+The warnings are the pre-existing Pydantic exposure of `datetime.utcnow()`
+deprecation. No tests failed or were skipped.
+
+### Decisions, limitations, and preservation contract
+
+Capability and policy precede cost/latency. Estimated values remain explicitly
+labeled and negative savings are truthful governance tradeoffs. The router does
+not alter Phase 1 policy/action outcomes or Phase 2 groundedness/repair behavior.
+
+Token/output estimates are approximate; provider billing is not queried.
+Expected latency and capability are planning metadata, and observed latency is
+local route-plus-generation time rather than provider-only latency. Initial-route
+cost does not yet add Phase 2 repair token cost, though retry count is exposed.
+Registry availability is configured rather than fetched from live provider
+permissions, so identifiers and pricing require maintenance. Existing
+preliminary risk classification remains authoritative router input.
+
+Phase 4 must preserve capability-first routing, explicit constraint breaches,
+estimated-versus-actual labels, deterministic arithmetic, all three routes, no
+extra complexity LLM call, Phase 1 fail-safe actions, Phase 2 bounded repair,
+route-owned single audit persistence, and every Phase 1–3 regression. Escalated
+original content must remain internal when authorized review access is added.
+
+**Next phase:** Phase 4 — Human Review and Feedback Loop.

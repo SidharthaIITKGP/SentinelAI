@@ -1,0 +1,54 @@
+version: 1
+metadata_is_estimated: true
+baseline_profile_id: standard
+
+# These are deterministic planning profiles, not measured provider latency or
+# actual invoice records. Pricing values are configurable estimates per 1M
+# tokens; context limits are conservative SentinelAI operational limits.
+latency_budgets_ms:
+  customer_chatbot: 700
+  hr_copilot: 900
+  finance_tool: 1200
+
+models:
+  - id: economy
+    provider_model: groq/openai/gpt-oss-20b
+    tier: ECONOMY
+    capability_score: 0.55
+    input_cost_per_1m_tokens: 0.075
+    output_cost_per_1m_tokens: 0.30
+    expected_latency_ms: 220
+    context_window: 8192
+    max_output_tokens: 256
+    supported_use_cases: [customer_chatbot]
+    supported_risk_levels: [LOW]
+    enabled: true
+    estimated_profile: true
+
+  - id: standard
+    provider_model: groq/openai/gpt-oss-120b
+    tier: STANDARD
+    capability_score: 0.80
+    input_cost_per_1m_tokens: 0.15
+    output_cost_per_1m_tokens: 0.60
+    expected_latency_ms: 500
+    context_window: 32768
+    max_output_tokens: 512
+    supported_use_cases: [customer_chatbot, hr_copilot, finance_tool]
+    supported_risk_levels: [LOW, MEDIUM]
+    enabled: true
+    estimated_profile: true
+
+  - id: premium
+    provider_model: groq/qwen/qwen3.6-27b
+    tier: PREMIUM
+    capability_score: 0.96
+    input_cost_per_1m_tokens: 0.60
+    output_cost_per_1m_tokens: 3.00
+    expected_latency_ms: 850
+    context_window: 131072
+    max_output_tokens: 800
+    supported_use_cases: [customer_chatbot, hr_copilot, finance_tool]
+    supported_risk_levels: [LOW, MEDIUM, HIGH]
+    enabled: true
+    estimated_profile: true

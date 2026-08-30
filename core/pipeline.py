@@ -6,7 +6,7 @@ Orchestrates the 5-step governance pipeline:
   Step 1 — SCAN:           detect injection + PII in incoming prompt
   Step 2 — CLASSIFY:       assign risk level based on scan results
   Step 3 — ROUTE+GENERATE: pick the right LLM model, call it, get response
-  Step 4 — EVALUATE:       run 3 engines IN PARALLEL on the LLM response
+  Step 4 — EVALUATE:       run trust/responsibility and efficiency evaluation
   Step 5 — ACT+LOG:        take governed action, write to audit log
 
 Engine ownership in the existing prototype:
@@ -18,6 +18,7 @@ Engine ownership in the existing prototype:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import time
 import uuid
@@ -30,6 +31,7 @@ from api.schemas import (
     AuditEntry,
     BiasResult,
     DetectorStatus,
+    EfficiencyResult,
     GroundednessResult,
     GroundednessVerdict,
     InjectionResult,
@@ -102,9 +104,15 @@ except ImportError:
 
 # ── Gaurav's modules (stubbed until Day 3) ────────────────────────────────────
 try:
-    from engines.efficiency.model_router import route_model
+    from engines.efficiency.model_router import (
+        evaluate_efficiency,
+        route_model,
+        routing_from_model_config,
+    )
 except ImportError:
     route_model = None
+    evaluate_efficiency = None
+    routing_from_model_config = None
     logger.warning("model_router not found — stubbed (Gaurav's module)")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -318,12 +326,12 @@ def _apply_groundedness_policy_guard(
 
 
 def _mock_model_config() -> dict:
-    """Default model config — Groq Qwen 3.8 27B (2M tokens/day free tier)."""
+    """Compatibility fallback used only when the efficiency router cannot load."""
     return {
-        "model": "groq/qwen/qwen3.8-27b",
+        "model": "groq/openai/gpt-oss-120b",
         "max_tokens": 200,
         "temperature": 0.3,
-        "reason": "Default — Groq Qwen 3.8 27B",
+        "reason": "Fallback model configuration — efficiency router unavailable",
     }
 
 
@@ -636,13 +644,37 @@ async def run_pipeline(
     step_start = time.time()
     logger.info(f"[{request_id}] Step 3: ROUTE + GENERATE starting...")
 
-    # Model routing (Gaurav's module)
-    # REAL (Day 3): model_config = route_model(preliminary_risk_level, request.use_case)
+    requested_latency_budget = None
+    if request.metadata and request.metadata.get("latency_budget_ms") is not None:
+        requested_latency_budget = int(request.metadata["latency_budget_ms"])
+
+    # Deterministic capability-first routing. This makes no additional LLM call.
     if route_model is not None:
-        model_config = route_model(preliminary_risk_level, request.use_case)
+        router_parameters = inspect.signature(route_model).parameters
+        if "latency_budget_ms" in router_parameters:
+            model_config = route_model(
+                preliminary_risk_level,
+                request.use_case,
+                request.prompt,
+                latency_budget_ms=requested_latency_budget,
+            )
+        else:
+            # Preserve compatibility with older two-argument router plugins.
+            model_config = route_model(preliminary_risk_level, request.use_case)
     else:
         model_config = _mock_model_config()
         logger.debug(f"[{request_id}] route_model stubbed — Gaurav's module")
+
+    routing_result = (
+        routing_from_model_config(
+            model_config,
+            preliminary_risk_level,
+            request.use_case,
+            request.prompt,
+        )
+        if routing_from_model_config is not None
+        else None
+    )
 
     # LLM call
     llm_response, tokens_input, tokens_output = await _call_llm(
@@ -665,20 +697,14 @@ async def run_pipeline(
     )
 
     # ──────────────────────────────────────────────────────────────────────
-    # STEP 4 — EVALUATE (3 engines run IN PARALLEL)
-    # Run all 3 evaluation engines simultaneously using asyncio.gather.
-    # This is critical for latency — running sequentially would be 3x slower.
+    # STEP 4 — EVALUATE
+    # External trust/responsibility engines run concurrently. Efficiency scoring
+    # is deterministic and local, so it adds no model call.
     #
     # Engine A: groundedness.py    → is the response factually grounded?
     # Engine B: pii_detector.py    → does the response contain PII? (Aman)
     # Engine C: bias_detector.py   → does the response contain bias? (Aman)
     #
-    # REAL (Day 3):
-    # groundedness_result, pii_response_result, bias_result = await asyncio.gather(
-    #     groundedness_check(llm_response, request.use_case),
-    #     detect_pii(llm_response),           # Aman's module — scan RESPONSE
-    #     detect_bias(llm_response),          # Aman's module
-    # )
     # ──────────────────────────────────────────────────────────────────────
     step_start = time.time()
     logger.info(f"[{request_id}] Step 4: EVALUATE starting (parallel engines)...")
@@ -749,11 +775,20 @@ async def run_pipeline(
             selected.status = DetectorStatus.UNAVAILABLE
         return selected
 
-    # THE KEY LINE — all 3 run simultaneously, not sequentially
+    # External response evaluators run simultaneously, not sequentially.
     groundedness_result, pii_response_result, bias_result = await asyncio.gather(
         _run_groundedness(),
         _run_pii_response(),
         _run_bias(),
+    )
+
+    efficiency_result = (
+        evaluate_efficiency(
+            routing_result,
+            actual_latency_ms=step_latencies.get("generate", 0),
+        )
+        if evaluate_efficiency is not None and routing_result is not None
+        else None
     )
 
     step_latencies["evaluate"] = int((time.time() - step_start) * 1000)
@@ -923,6 +958,10 @@ async def run_pipeline(
             },
         )
 
+    if efficiency_result is not None:
+        efficiency_result.retry_count = action_result.repair_attempts
+        action_result.evidence["efficiency"] = efficiency_result.model_dump()
+
     # Total pipeline latency
     total_latency_ms = max(1, int((time.time() - pipeline_start) * 1000))
     step_latencies["act"] = int((time.time() - step_start) * 1000)
@@ -944,6 +983,7 @@ async def run_pipeline(
         model_used=model_used,
         tokens_input=tokens_input,
         tokens_output=tokens_output,
+        efficiency_result=efficiency_result,
         latency_ms=total_latency_ms,
         step_latencies=step_latencies,
     )
@@ -1033,6 +1073,7 @@ def _build_audit_entry(
     tokens_output: int,
     latency_ms: int,
     step_latencies: dict[str, int],
+    efficiency_result: Optional[EfficiencyResult] = None,
 ) -> AuditEntry:
     """
     Constructs the complete AuditEntry for one pipeline run.
@@ -1052,6 +1093,10 @@ def _build_audit_entry(
         tokens_input=tokens_input,
         tokens_output=tokens_output,
         tokens_total=tokens_input + tokens_output,
+        estimated_cost_usd=(
+            efficiency_result.estimated_cost_usd if efficiency_result else None
+        ),
+        efficiency=efficiency_result,
         final_response=action_result.final_response,
         injection=injection_result,
         pii_in_prompt=pii_prompt_result,

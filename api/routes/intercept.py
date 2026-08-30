@@ -80,6 +80,7 @@ async def intercept(request: InterceptRequest) -> InterceptResponse:
         risk_score=risk_score_value,
         latency_ms=audit_entry.latency_ms or total_latency_ms,
         evidence=action_result.evidence,
+        efficiency=audit_entry.efficiency,
         governed=True,
         escalation_required=action_result.escalation_required,
         risk_breakdown={
