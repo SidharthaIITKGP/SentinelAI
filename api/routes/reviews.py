@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.schemas import (
     ReviewDecisionRequest,
@@ -16,6 +16,9 @@ from api.schemas import (
     UseCase,
 )
 from data.review_store import ReviewConflictError, ReviewNotFoundError, review_store
+from core.security import (
+    ReviewerIdentity, authenticate_reviewer, reviewer_identity_or_local,
+)
 
 router = APIRouter()
 
@@ -28,8 +31,11 @@ def _not_found() -> HTTPException:
 
 
 @router.get("/reviews/metrics", response_model=ReviewMetrics)
-async def review_metrics() -> ReviewMetrics:
-    return await review_store.metrics()
+async def review_metrics(
+    reviewer: ReviewerIdentity = Depends(authenticate_reviewer),
+) -> ReviewMetrics:
+    identity = reviewer_identity_or_local(reviewer)
+    return await review_store.metrics(identity.allowed_tenants)
 
 
 @router.get("/reviews", response_model=list[ReviewSummary])
@@ -37,14 +43,20 @@ async def list_reviews(
     status: ReviewStatus = ReviewStatus.PENDING,
     use_case: Optional[UseCase] = None,
     limit: int = Query(default=50, ge=1, le=200),
+    reviewer: ReviewerIdentity = Depends(authenticate_reviewer),
 ) -> list[ReviewSummary]:
-    return await review_store.list(status, use_case, limit)
+    identity = reviewer_identity_or_local(reviewer)
+    return await review_store.list(status, use_case, limit, identity.allowed_tenants)
 
 
 @router.get("/reviews/{request_id}/resolution", response_model=ReviewResolution)
-async def get_resolution(request_id: str) -> ReviewResolution:
+async def get_resolution(
+    request_id: str,
+    reviewer: ReviewerIdentity = Depends(authenticate_reviewer),
+) -> ReviewResolution:
+    identity = reviewer_identity_or_local(reviewer)
     try:
-        review = await review_store.get(request_id)
+        review = await review_store.get(request_id, identity.allowed_tenants)
     except ReviewNotFoundError:
         raise _not_found()
     if review.status == ReviewStatus.PENDING.value:
@@ -59,19 +71,30 @@ async def get_resolution(request_id: str) -> ReviewResolution:
 
 
 @router.get("/reviews/{request_id}", response_model=ReviewRecord)
-async def get_review(request_id: str) -> ReviewRecord:
+async def get_review(
+    request_id: str,
+    reviewer: ReviewerIdentity = Depends(authenticate_reviewer),
+) -> ReviewRecord:
+    identity = reviewer_identity_or_local(reviewer)
     try:
-        return await review_store.get(request_id)
+        return await review_store.get(request_id, identity.allowed_tenants)
     except ReviewNotFoundError:
         raise _not_found()
 
 
 @router.post("/reviews/{request_id}/decision", response_model=ReviewRecord)
 async def decide_review(
-    request_id: str, decision: ReviewDecisionRequest
+    request_id: str,
+    decision: ReviewDecisionRequest,
+    reviewer: ReviewerIdentity = Depends(authenticate_reviewer),
 ) -> ReviewRecord:
+    identity = reviewer_identity_or_local(reviewer)
+    if identity.authenticated:
+        decision = decision.model_copy(update={"reviewer_id": identity.reviewer_id})
+    elif not decision.reviewer_id:
+        raise HTTPException(status_code=422, detail="reviewer_id is required in local mode")
     try:
-        return await review_store.decide(request_id, decision)
+        return await review_store.decide(request_id, decision, identity.allowed_tenants)
     except ReviewNotFoundError:
         raise _not_found()
     except ReviewConflictError:

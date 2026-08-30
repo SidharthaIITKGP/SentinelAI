@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts';
 import { BarChart2 } from 'lucide-react';
-import { API_BASE } from './shared.jsx';
+import { API_BASE, TENANT_HEADERS } from './shared.jsx';
 
 const ACTION_PIE_COLORS = {
   ALLOW:    '#4ADE80',
@@ -55,7 +55,7 @@ export default function ChartsRow() {
 
   const fetchMetrics = async () => {
     try {
-      const res = await fetch(`${API_BASE}/metrics?period=24h`);
+      const res = await fetch(`${API_BASE}/metrics?period=24h`, { headers: TENANT_HEADERS });
       if (res.ok) setMetrics(await res.json());
     } catch {}
   };

@@ -12,6 +12,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
     prompt          TEXT,
     llm_response    TEXT,
     final_response  TEXT,
+    prompt_sha256   CHAR(64),
+    llm_response_sha256 CHAR(64),
+    final_response_sha256 CHAR(64),
+    audit_content_mode VARCHAR(20) NOT NULL DEFAULT 'redacted',
+    prompt_length   INT,
+    llm_response_length INT,
+    final_response_length INT,
     risk_level      VARCHAR(10),
     risk_score      FLOAT,
     risk_breakdown  JSONB,
@@ -23,6 +30,14 @@ CREATE TABLE IF NOT EXISTS audit_log (
     flagged_claims  JSONB,
     pii_entities    JSONB
 );
+
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS prompt_sha256 CHAR(64);
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS llm_response_sha256 CHAR(64);
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS final_response_sha256 CHAR(64);
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS audit_content_mode VARCHAR(20) NOT NULL DEFAULT 'redacted';
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS prompt_length INT;
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS llm_response_length INT;
+ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS final_response_length INT;
 
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp    ON audit_log (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_log_use_case     ON audit_log (use_case);

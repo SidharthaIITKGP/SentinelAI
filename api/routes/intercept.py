@@ -1,5 +1,5 @@
 """
-SentinelAI — POST /intercept route (Gaurav's module)
+SentinelAI — authenticated POST /intercept route
 
 Wires the incoming HTTP request through the existing core.pipeline.run_pipeline()
 and persists the audit entry.
@@ -14,10 +14,11 @@ from __future__ import annotations
 import logging
 import time
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from api.schemas import ActionType, InterceptRequest, InterceptResponse
 from core.pipeline import run_pipeline
+from core.security import TenantIdentity, authenticate_tenant, tenant_identity_or_local
 from data.audit_logger import log_request
 from data.review_store import review_store
 
@@ -36,7 +37,10 @@ router = APIRouter()
         "governed response."
     ),
 )
-async def intercept(request: InterceptRequest) -> InterceptResponse:
+async def intercept(
+    request: InterceptRequest,
+    tenant_identity: TenantIdentity = Depends(authenticate_tenant),
+) -> InterceptResponse:
     """
     POST /intercept
 
@@ -47,19 +51,24 @@ async def intercept(request: InterceptRequest) -> InterceptResponse:
       4. Return InterceptResponse with request_id, action, risk info, latency
     """
     wall_start = time.time()
+    identity = tenant_identity_or_local(tenant_identity)
+    if identity.authenticated:
+        if request.tenant_id != identity.tenant_id:
+            raise HTTPException(status_code=403, detail="Tenant identity does not match credentials")
+        request = request.model_copy(update={"tenant_id": identity.tenant_id})
 
     try:
         # Step 2 — run the full governance pipeline
         action_result, audit_entry = await run_pipeline(request)
     except Exception as e:
-        logger.error(f"Pipeline failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
+        logger.error("Pipeline failed | error_type=%s", type(e).__name__, exc_info=True)
+        raise HTTPException(status_code=500, detail="Governance pipeline failed")
 
     # Step 3 — the route owns the one durable audit write.
     try:
         request_id = await log_request(audit_entry)
     except Exception as e:
-        logger.warning(f"Audit log failed (non-fatal): {e}")
+        logger.warning("Audit log failed (non-fatal) | error_type=%s", type(e).__name__)
         request_id = audit_entry.request_id
 
     # Escalations become durable review work. Queue failure must never release
@@ -68,7 +77,10 @@ async def intercept(request: InterceptRequest) -> InterceptResponse:
         try:
             await review_store.enqueue(audit_entry)
         except Exception as e:
-            logger.error("Human-review enqueue failed for %s: %s", request_id, e)
+            logger.error(
+                "Human-review enqueue failed for %s | error_type=%s",
+                request_id, type(e).__name__,
+            )
 
     # Total wall-clock latency (includes audit write)
     total_latency_ms = max(1, int((time.time() - wall_start) * 1000))

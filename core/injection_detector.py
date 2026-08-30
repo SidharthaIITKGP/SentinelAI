@@ -533,7 +533,7 @@ async def _scan_prompt_guard(prompt: str) -> tuple[float, str]:
         )
 
         result_text = response.choices[0].message.content.strip()
-        logger.debug(f"Prompt Guard result: {result_text}")
+        logger.debug("Prompt Guard classification completed")
 
         # Llama Prompt Guard 2 (via Groq) returns a raw injection-probability
         # score as text (e.g. "0.9944"), not a categorical label.
@@ -549,7 +549,10 @@ async def _scan_prompt_guard(prompt: str) -> tuple[float, str]:
         return score, label
 
     except Exception as e:
-        logger.warning(f"Prompt Guard failed — falling back to local classifier | error={str(e)}")
+        logger.warning(
+            "Prompt Guard failed — falling back to local classifier | error_type=%s",
+            type(e).__name__,
+        )
         # Fall back to existing HuggingFace classifier
         return await _scan_classifier(prompt)
 
@@ -628,17 +631,19 @@ async def _llm_judge(prompt: str) -> tuple[str, float]:
 
         if verdict in ["INJECTION", "HARMFUL", "CLEAN"]:
             logger.info(
-                f"LLM Judge verdict: {verdict} | "
-                f"prompt={prompt[:60]}"
+                "LLM Judge verdict: %s | prompt_length=%d", verdict, len(prompt)
             )
             return verdict, 0.90
         else:
             # Unexpected response — default to safe
-            logger.warning(f"LLM Judge unexpected response: '{verdict}' — defaulting to CLEAN")
+            logger.warning("LLM Judge returned an unexpected format — defaulting to CLEAN")
             return "CLEAN", 0.0
 
     except Exception as e:
-        logger.error(f"LLM Judge failed: {e} — defaulting to CLEAN")
+        logger.error(
+            "LLM Judge failed | error_type=%s — defaulting to CLEAN",
+            type(e).__name__,
+        )
         return "CLEAN", 0.0
 
 
@@ -739,7 +744,7 @@ async def scan_toxic_content(prompt: str) -> tuple[bool, float, str]:
             f"Semantic toxicity detected | "
             f"concept={matched_concept} | "
             f"similarity={similarity_score:.3f} | "
-            f"prompt={prompt[:60]}"
+            f"prompt_length={len(prompt)}"
         )
 
     return is_toxic, similarity_score, matched_concept
@@ -867,7 +872,7 @@ async def scan(prompt: str) -> InjectionResult:
         # Call LLM judge to make the final call
         logger.info(
             f"Uncertain signal (max={max_signal:.3f}) — calling LLM judge | "
-            f"prompt={prompt[:60]}"
+            f"prompt_length={len(prompt)}"
         )
         verdict, judge_confidence = await _llm_judge(prompt)
 
@@ -875,7 +880,7 @@ async def scan(prompt: str) -> InjectionResult:
             logger.info(
                 f"LLM Judge BLOCKED | verdict={verdict} | "
                 f"confidence={judge_confidence:.3f} | "
-                f"prompt={prompt[:60]}"
+                f"prompt_length={len(prompt)}"
             )
             return InjectionResult(
                 detected=True,
@@ -885,7 +890,7 @@ async def scan(prompt: str) -> InjectionResult:
                 flagged_text=prompt[:200],
             )
         else:
-            logger.debug(f"LLM Judge CLEAN | prompt={prompt[:60]}")
+            logger.debug("LLM Judge CLEAN | prompt_length=%d", len(prompt))
 
     # ── CLEAN — all layers passed ───────────────────────────────────────────
     logger.debug(

@@ -4,11 +4,8 @@
 # Services:
 #   postgres  — PostgreSQL database
 #   qdrant    — Vector database (trust/groundedness engine)
-#   redis     — Cache layer
 #   api       — FastAPI backend (SentinelAI)
 #   dashboard — React frontend
-
-version: "3.9"
 
 services:
 
@@ -48,21 +45,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Redis ───────────────────────────────────────────────────────────────────
-  redis:
-    image: redis:7-alpine
-    container_name: sentinelai-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   # ── FastAPI Backend ─────────────────────────────────────────────────────────
   api:
     build:
@@ -78,14 +60,16 @@ services:
       DATABASE_URL: postgresql://sentinelai:sentinelai@postgres:5432/sentinelai
       QDRANT_HOST: qdrant
       QDRANT_PORT: 6333
-      REDIS_URL: redis://redis:6379/0
+      SENTINEL_AUTH_ENABLED: ${SENTINEL_AUTH_ENABLED:-false}
+      SENTINEL_TENANT_API_KEYS_JSON: '${SENTINEL_TENANT_API_KEYS_JSON:-{}}'
+      SENTINEL_REVIEWER_API_KEYS_JSON: '${SENTINEL_REVIEWER_API_KEYS_JSON:-{}}'
+      SENTINEL_AUDIT_CONTENT_MODE: ${SENTINEL_AUDIT_CONTENT_MODE:-redacted}
+      SENTINEL_CORS_ORIGINS: ${SENTINEL_CORS_ORIGINS:-http://localhost:5173}
       PYTHONUNBUFFERED: "1"
     depends_on:
       postgres:
         condition: service_healthy
       qdrant:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     volumes:
       - .:/app
@@ -97,16 +81,16 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile.dashboard
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+        VITE_SENTINEL_API_KEY: ${VITE_SENTINEL_API_KEY:-}
     container_name: sentinelai-dashboard
     restart: unless-stopped
     ports:
       - "5173:80"
     depends_on:
       - api
-    environment:
-      VITE_API_URL: http://api:8000
 
 volumes:
   postgres_data:
   qdrant_data:
-  redis_data:

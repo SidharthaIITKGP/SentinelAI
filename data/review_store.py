@@ -108,33 +108,42 @@ class PostgresReviewStore:
         return _record(row) if row else None
 
     async def list(
-        self, status: ReviewStatus, use_case: Optional[str], limit: int
+        self, status: ReviewStatus, use_case: Optional[str], limit: int,
+        allowed_tenants: Optional[tuple[str, ...]] = None,
     ) -> list[ReviewSummary]:
         pool = await _get_pool()
         rows = await pool.fetch(
             """
             SELECT * FROM human_reviews
             WHERE status = $1 AND ($2::varchar IS NULL OR use_case = $2)
+              AND ($3::varchar[] IS NULL OR tenant_id = ANY($3::varchar[]))
             ORDER BY created_at ASC, id ASC
-            LIMIT $3
+            LIMIT $4
             """,
             status.value if hasattr(status, "value") else status,
             use_case,
+            list(allowed_tenants) if allowed_tenants is not None else None,
             limit,
         )
         return [_summary(_record(row)) for row in rows]
 
-    async def get(self, request_id: str) -> ReviewRecord:
+    async def get(
+        self, request_id: str, allowed_tenants: Optional[tuple[str, ...]] = None
+    ) -> ReviewRecord:
         pool = await _get_pool()
         row = await pool.fetchrow(
-            "SELECT * FROM human_reviews WHERE request_id = $1", request_id
+            """SELECT * FROM human_reviews WHERE request_id = $1
+               AND ($2::varchar[] IS NULL OR tenant_id = ANY($2::varchar[]))""",
+            request_id,
+            list(allowed_tenants) if allowed_tenants is not None else None,
         )
         if row is None:
             raise ReviewNotFoundError(request_id)
         return _record(row)
 
     async def decide(
-        self, request_id: str, decision: ReviewDecisionRequest
+        self, request_id: str, decision: ReviewDecisionRequest,
+        allowed_tenants: Optional[tuple[str, ...]] = None,
     ) -> ReviewRecord:
         status_by_decision = {
             ReviewDecision.APPROVE.value: ReviewStatus.APPROVED.value,
@@ -155,16 +164,20 @@ class PostgresReviewStore:
                     SET status=$2, reviewer_id=$3, reviewer_notes=$4,
                         edited_response=$5, reviewed_at=NOW()
                     WHERE request_id=$1 AND status='PENDING'
+                      AND ($6::varchar[] IS NULL OR tenant_id = ANY($6::varchar[]))
                     RETURNING *
                     """,
                     request_id, status_by_decision[decision.decision],
                     decision.reviewer_id, decision.notes,
                     decision.edited_response if decision.decision == ReviewDecision.EDIT.value else None,
+                    list(allowed_tenants) if allowed_tenants is not None else None,
                 )
                 if row is None:
                     exists = await conn.fetchval(
-                        "SELECT EXISTS(SELECT 1 FROM human_reviews WHERE request_id=$1)",
+                        """SELECT EXISTS(SELECT 1 FROM human_reviews WHERE request_id=$1
+                           AND ($2::varchar[] IS NULL OR tenant_id = ANY($2::varchar[])))""",
                         request_id,
+                        list(allowed_tenants) if allowed_tenants is not None else None,
                     )
                     if not exists:
                         raise ReviewNotFoundError(request_id)
@@ -184,7 +197,9 @@ class PostgresReviewStore:
                 )
         return _record(row)
 
-    async def metrics(self) -> ReviewMetrics:
+    async def metrics(
+        self, allowed_tenants: Optional[tuple[str, ...]] = None
+    ) -> ReviewMetrics:
         pool = await _get_pool()
         row = await pool.fetchrow(
             """
@@ -194,7 +209,9 @@ class PostgresReviewStore:
               COUNT(*) FILTER (WHERE status='EDITED') AS edited,
               COUNT(*) FILTER (WHERE status='REJECTED') AS rejected
             FROM human_reviews
-            """
+            WHERE ($1::varchar[] IS NULL OR tenant_id = ANY($1::varchar[]))
+            """,
+            list(allowed_tenants) if allowed_tenants is not None else None,
         )
         counts = {key: int(row[key] or 0) for key in ("total", "pending", "approved", "edited", "rejected")}
         completed = counts["approved"] + counts["edited"] + counts["rejected"]
@@ -207,7 +224,10 @@ class PostgresReviewStore:
             agreement_rate=(counts["edited"] + counts["rejected"]) / completed if completed else 0.0,
         )
 
-    async def create_feedback(self, feedback: FeedbackRequest) -> str:
+    async def create_feedback(
+        self, feedback: FeedbackRequest,
+        allowed_tenants: Optional[tuple[str, ...]] = None,
+    ) -> str:
         pool = await _get_pool()
         row = await pool.fetchrow(
             """
@@ -216,24 +236,38 @@ class PostgresReviewStore:
                 notes, false_positive, false_negative
             )
             SELECT id,$2,$3,$4,$5,$6,$7 FROM audit_log WHERE id=$1
+              AND ($8::varchar[] IS NULL OR tenant_id = ANY($8::varchar[]))
             RETURNING id
             """,
             feedback.request_id, feedback.sentinelai_action, feedback.correct_action,
             feedback.reviewer_id, feedback.notes, feedback.false_positive,
             feedback.false_negative,
+            list(allowed_tenants) if allowed_tenants is not None else None,
         )
         if row is None:
             raise ReviewNotFoundError(feedback.request_id)
         return str(row["id"])
 
-    async def get_feedback(self, request_id: str) -> list[FeedbackRecord]:
+    async def get_feedback(
+        self, request_id: str, allowed_tenants: Optional[tuple[str, ...]] = None
+    ) -> list[FeedbackRecord]:
         pool = await _get_pool()
         rows = await pool.fetch(
-            "SELECT * FROM feedback WHERE request_id=$1 ORDER BY timestamp ASC, id ASC",
+            """SELECT f.* FROM feedback f
+               JOIN audit_log a ON a.id=f.request_id
+               WHERE f.request_id=$1
+                 AND ($2::varchar[] IS NULL OR a.tenant_id = ANY($2::varchar[]))
+               ORDER BY f.timestamp ASC, f.id ASC""",
             request_id,
+            list(allowed_tenants) if allowed_tenants is not None else None,
         )
         if not rows:
-            exists = await pool.fetchval("SELECT EXISTS(SELECT 1 FROM audit_log WHERE id=$1)", request_id)
+            exists = await pool.fetchval(
+                """SELECT EXISTS(SELECT 1 FROM audit_log WHERE id=$1
+                   AND ($2::varchar[] IS NULL OR tenant_id = ANY($2::varchar[])))""",
+                request_id,
+                list(allowed_tenants) if allowed_tenants is not None else None,
+            )
             if not exists:
                 raise ReviewNotFoundError(request_id)
         return [FeedbackRecord(

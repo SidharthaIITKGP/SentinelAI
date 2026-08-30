@@ -376,12 +376,12 @@ class EfficiencyResult(BaseModel):
 
 
 class PolicyDecision(BaseModel):
-    """Policy-engine decision after evaluating safe risk and detector signals."""
+    """YAML policy-as-code decision after evaluating safe aggregate signals."""
     model_config = ConfigDict(use_enum_values=True)
 
     approved: bool = Field(..., description="Is the proposed action policy-compliant?")
     final_action: ActionType = Field(
-        ..., description="What action OPA says should be taken (may override pipeline's proposal)"
+        ..., description="What action policy-as-code requires (may override the proposal)"
     )
     reason: str = Field(..., description="Why this decision was made (human-readable, goes to audit)")
     policy_file: str = Field(..., description="Which .rego file made this decision")
@@ -1098,8 +1098,8 @@ class FeedbackRequest(BaseModel):
     sentinelai_action: ActionType = Field(
         ..., description="What SentinelAI actually did"
     )
-    reviewer_id: str = Field(
-        ..., min_length=1, description="Who is submitting the feedback"
+    reviewer_id: Optional[str] = Field(
+        default=None, min_length=1, description="Who is submitting the feedback"
     )
     notes: Optional[str] = Field(
         default=None, description="Free text explanation"
@@ -1157,7 +1157,7 @@ class ReviewDecisionRequest(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     decision: ReviewDecision
-    reviewer_id: str = Field(..., min_length=1)
+    reviewer_id: Optional[str] = Field(default=None, min_length=1)
     notes: Optional[str] = None
     edited_response: Optional[str] = None
 
@@ -1331,11 +1331,11 @@ class HealthResponse(BaseModel):
     """Return type of GET /health."""
     model_config = ConfigDict(use_enum_values=True)
 
-    status: str = Field(..., description="'ok' | 'degraded' | 'down'")
+    status: str = Field(..., description="'ok' | 'degraded' | 'unhealthy'")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     services: Dict[str, bool] = Field(
         default_factory=dict,
-        description='{"qdrant": True, "postgres": True, "redis": True, "opa": True}'
+        description='{"api": True, "postgresql": True, "qdrant": True, "llm_configured": True}'
     )
     version: str = Field(default="1.0.0", description="App version string")
     uptime_seconds: float = Field(default=0.0, ge=0.0)

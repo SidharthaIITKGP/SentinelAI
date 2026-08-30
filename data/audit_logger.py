@@ -1,5 +1,5 @@
 """
-SentinelAI — Async PostgreSQL Audit Logger (Gaurav's module)
+SentinelAI — Async PostgreSQL Audit Logger
 
 Uses asyncpg for high-performance async database access.
 All Pydantic models imported from api.schemas — no duplicates here.
@@ -23,6 +23,7 @@ from api.schemas import (
     UseCase,
     UseCaseMetrics,
 )
+from data.audit_privacy import prepare_audit_content, sanitize_evidence_metadata
 
 logger = logging.getLogger("sentinelai.audit_logger")
 
@@ -123,16 +124,20 @@ async def log_request(audit_entry: AuditEntry) -> str:
         )
 
         # Extract flagged_claims from groundedness result
+        content = prepare_audit_content(
+            audit_entry.prompt, audit_entry.llm_response, audit_entry.final_response
+        )
         flagged_claims = None
         if audit_entry.groundedness and audit_entry.groundedness.flagged_claims:
-            flagged_claims = _to_jsonb(audit_entry.groundedness.flagged_claims)
+            flagged_claims = _to_jsonb(sanitize_evidence_metadata(
+                audit_entry.groundedness.flagged_claims, content.mode
+            ))
 
-        # Extract PII entities from pii_in_response
+        # PII findings contain only offsets, types, and placeholders.
         pii_entities = None
         if audit_entry.pii_in_response and audit_entry.pii_in_response.found:
             pii_entities = _to_jsonb(audit_entry.pii_in_response.entities)
 
-        # Total tokens
         tokens_used = audit_entry.tokens_total
 
         async with pool.acquire() as conn:
@@ -141,6 +146,9 @@ async def log_request(audit_entry: AuditEntry) -> str:
                 INSERT INTO audit_log (
                     id, timestamp, tenant_id, use_case,
                     prompt, llm_response, final_response,
+                    prompt_sha256, llm_response_sha256, final_response_sha256,
+                    audit_content_mode, prompt_length, llm_response_length,
+                    final_response_length,
                     risk_level, risk_score, risk_breakdown,
                     action_taken, action_evidence,
                     model_used, tokens_used, latency_ms,
@@ -148,10 +156,11 @@ async def log_request(audit_entry: AuditEntry) -> str:
                 ) VALUES (
                     $1::uuid, $2, $3, $4,
                     $5, $6, $7,
-                    $8, $9, $10::jsonb,
-                    $11, $12::jsonb,
-                    $13, $14, $15,
-                    $16::jsonb, $17::jsonb
+                    $8, $9, $10, $11, $12, $13, $14,
+                    $15, $16, $17::jsonb,
+                    $18, $19::jsonb,
+                    $20, $21, $22,
+                    $23::jsonb, $24::jsonb
                 )
                 ON CONFLICT (id) DO NOTHING
                 """,
@@ -159,14 +168,23 @@ async def log_request(audit_entry: AuditEntry) -> str:
                 audit_entry.timestamp,
                 audit_entry.tenant_id,
                 use_case_value,
-                audit_entry.prompt,
-                audit_entry.llm_response,
-                audit_entry.final_response,
+                content.prompt,
+                content.llm_response,
+                content.final_response,
+                content.prompt_sha256,
+                content.llm_response_sha256,
+                content.final_response_sha256,
+                content.mode,
+                content.prompt_length,
+                content.llm_response_length,
+                content.final_response_length,
                 risk_level_value,
                 risk_score_value,
                 _to_jsonb(audit_entry.risk_score.breakdown),
                 action_taken_value,
-                _to_jsonb(audit_entry.action.evidence),
+                _to_jsonb(sanitize_evidence_metadata(
+                    audit_entry.action.evidence, content.mode
+                )),
                 audit_entry.model_used,
                 tokens_used,
                 audit_entry.latency_ms,
@@ -181,7 +199,7 @@ async def log_request(audit_entry: AuditEntry) -> str:
         return audit_entry.request_id
 
     except Exception as e:
-        logger.error(f"Failed to write audit log: {e}")
+        logger.error("Failed to write audit log | error_type=%s", type(e).__name__)
         # Don't crash the pipeline — audit failure is non-fatal
         return audit_entry.request_id
 
@@ -196,6 +214,13 @@ def _row_to_audit_entry(row: asyncpg.Record) -> dict:
         "prompt": row["prompt"],
         "llm_response": row["llm_response"],
         "final_response": row["final_response"],
+        "prompt_sha256": row["prompt_sha256"],
+        "llm_response_sha256": row["llm_response_sha256"],
+        "final_response_sha256": row["final_response_sha256"],
+        "audit_content_mode": row["audit_content_mode"],
+        "prompt_length": row["prompt_length"],
+        "llm_response_length": row["llm_response_length"],
+        "final_response_length": row["final_response_length"],
         "risk_level": row["risk_level"],
         "risk_score": row["risk_score"],
         "risk_breakdown": json.loads(row["risk_breakdown"]) if row["risk_breakdown"] else {},
@@ -209,7 +234,7 @@ def _row_to_audit_entry(row: asyncpg.Record) -> dict:
     }
 
 
-async def get_recent_logs(limit: int = 50) -> List[dict]:
+async def get_recent_logs(limit: int = 50, tenant_id: Optional[str] = None) -> List[dict]:
     """
     Return the most recent audit_log rows as dicts.
     Consumed by GET /audit/recent — dashboard LiveFeed polls every 3s.
@@ -220,18 +245,22 @@ async def get_recent_logs(limit: int = 50) -> List[dict]:
             rows = await conn.fetch(
                 """
                 SELECT * FROM audit_log
+                WHERE ($2::varchar IS NULL OR tenant_id = $2)
                 ORDER BY timestamp DESC
                 LIMIT $1
                 """,
                 limit,
+                tenant_id,
             )
         return [_row_to_audit_entry(r) for r in rows]
     except Exception as e:
-        logger.error(f"get_recent_logs failed: {e}")
+        logger.error("get_recent_logs failed | error_type=%s", type(e).__name__)
         return []
 
 
-async def get_logs_by_use_case(use_case: str) -> List[dict]:
+async def get_logs_by_use_case(
+    use_case: str, tenant_id: Optional[str] = None
+) -> List[dict]:
     """
     Return audit log rows filtered by use_case.
     """
@@ -241,19 +270,22 @@ async def get_logs_by_use_case(use_case: str) -> List[dict]:
             rows = await conn.fetch(
                 """
                 SELECT * FROM audit_log
-                WHERE use_case = $1
+                WHERE use_case = $1 AND ($2::varchar IS NULL OR tenant_id = $2)
                 ORDER BY timestamp DESC
                 LIMIT 200
                 """,
                 use_case,
+                tenant_id,
             )
         return [_row_to_audit_entry(r) for r in rows]
     except Exception as e:
-        logger.error(f"get_logs_by_use_case failed: {e}")
+        logger.error("get_logs_by_use_case failed | error_type=%s", type(e).__name__)
         return []
 
 
-async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
+async def get_metrics_summary(
+    period: str = "24h", tenant_id: Optional[str] = None
+) -> MetricsSummary:
     """
     Calculate MetricsSummary from audit_log.
     Consumed by GET /metrics — dashboard MetricsPanel polls every 30s.
@@ -270,8 +302,10 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
         async with pool.acquire() as conn:
             # Total requests in period
             total_row = await conn.fetchrow(
-                "SELECT COUNT(*) AS cnt FROM audit_log WHERE timestamp >= $1",
+                """SELECT COUNT(*) AS cnt FROM audit_log
+                   WHERE timestamp >= $1 AND ($2::varchar IS NULL OR tenant_id=$2)""",
                 period_start,
+                tenant_id,
             )
             total_requests = total_row["cnt"] if total_row else 0
 
@@ -281,9 +315,11 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
                 SELECT action_taken, COUNT(*) AS cnt
                 FROM audit_log
                 WHERE timestamp >= $1 AND action_taken IS NOT NULL
+                  AND ($2::varchar IS NULL OR tenant_id=$2)
                 GROUP BY action_taken
                 """,
                 period_start,
+                tenant_id,
             )
             action_counts = {r["action_taken"]: r["cnt"] for r in action_rows}
 
@@ -303,9 +339,11 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
                 SELECT risk_level, COUNT(*) AS cnt
                 FROM audit_log
                 WHERE timestamp >= $1 AND risk_level IS NOT NULL
+                  AND ($2::varchar IS NULL OR tenant_id=$2)
                 GROUP BY risk_level
                 """,
                 period_start,
+                tenant_id,
             )
             risk_counts = {r["risk_level"]: r["cnt"] for r in risk_rows}
             risk_distribution = RiskDistribution(
@@ -323,8 +361,10 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
                     COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms), 0) AS p95_latency
                 FROM audit_log
                 WHERE timestamp >= $1 AND latency_ms IS NOT NULL
+                  AND ($2::varchar IS NULL OR tenant_id=$2)
                 """,
                 period_start,
+                tenant_id,
             )
             avg_latency_ms = float(latency_row["avg_latency"]) if latency_row else 0.0
             p95_latency_ms = float(latency_row["p95_latency"]) if latency_row else 0.0
@@ -344,9 +384,11 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
                     SUM(CASE WHEN action_taken = 'ESCALATE' THEN 1 ELSE 0 END) AS escalate_cnt
                 FROM audit_log
                 WHERE timestamp >= $1 AND use_case IS NOT NULL
+                  AND ($2::varchar IS NULL OR tenant_id=$2)
                 GROUP BY use_case
                 """,
                 period_start,
+                tenant_id,
             )
 
             by_use_case = []
@@ -382,10 +424,12 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
                     COUNT(*) FILTER (WHERE correct_action != sentinelai_action
                                      AND sentinelai_action IN ('BLOCK','REDACT','ESCALATE')) AS fp_count,
                     COUNT(*) AS total_feedback
-                FROM feedback
-                WHERE timestamp >= $1
+                FROM feedback f
+                JOIN audit_log a ON a.id=f.request_id
+                WHERE f.timestamp >= $1 AND ($2::varchar IS NULL OR a.tenant_id=$2)
                 """,
                 period_start,
+                tenant_id,
             )
             fp_count = fp_row["fp_count"] if fp_row else 0
             total_feedback = fp_row["total_feedback"] if fp_row else 0
@@ -393,8 +437,11 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
 
             # Aggregate tallies
             pii_redaction_row = await conn.fetchrow(
-                "SELECT COUNT(*) AS cnt FROM audit_log WHERE timestamp >= $1 AND action_taken = 'REDACT'",
+                """SELECT COUNT(*) AS cnt FROM audit_log
+                   WHERE timestamp >= $1 AND action_taken = 'REDACT'
+                     AND ($2::varchar IS NULL OR tenant_id=$2)""",
                 period_start,
+                tenant_id,
             )
             total_pii_redactions = pii_redaction_row["cnt"] if pii_redaction_row else 0
 
@@ -402,10 +449,12 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
                 """
                 SELECT COUNT(*) AS cnt FROM audit_log
                 WHERE timestamp >= $1
+                  AND ($2::varchar IS NULL OR tenant_id=$2)
                   AND risk_breakdown IS NOT NULL
                   AND (risk_breakdown->>'bias_score')::float > 0.1
                 """,
                 period_start,
+                tenant_id,
             )
             total_bias_detections = bias_row["cnt"] if bias_row else 0
 
@@ -413,10 +462,12 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
                 """
                 SELECT COUNT(*) AS cnt FROM audit_log
                 WHERE timestamp >= $1
+                  AND ($2::varchar IS NULL OR tenant_id=$2)
                   AND flagged_claims IS NOT NULL
                   AND jsonb_array_length(flagged_claims) > 0
                 """,
                 period_start,
+                tenant_id,
             )
             total_hallucinations_caught = halluc_row["cnt"] if halluc_row else 0
 
@@ -437,7 +488,7 @@ async def get_metrics_summary(period: str = "24h") -> MetricsSummary:
         )
 
     except Exception as e:
-        logger.error(f"get_metrics_summary failed: {e}")
+        logger.error("get_metrics_summary failed | error_type=%s", type(e).__name__)
         # Return empty summary rather than crashing the dashboard
         return MetricsSummary(
             period=period,

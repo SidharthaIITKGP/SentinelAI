@@ -374,3 +374,64 @@ pull-based and feedback does not automatically learn.
 
 **Current phase:** Phase 4 — COMPLETE
 **Next phase:** Phase 5 — Enterprise Hardening and Claim Cleanup (not started).
+
+## 2026-08-30 — Phase 5 COMPLETE
+
+Phase 5 completed enterprise hardening and system integration without beginning
+Phase 6. Lightweight API-key authentication now derives authoritative tenant and
+reviewer identities from validated environment mappings. Tenant spoofing is
+rejected, reviewer identity is server-derived, and audit/review/resolution/
+feedback/metrics repositories apply tenant predicates before returning data.
+Cross-tenant reviewer requests return the same `404` as missing records.
+
+Audit persistence now defaults to reuse-based PII/secret redaction, fails closed
+to a withholding marker, supports metadata-only storage, and permits raw storage
+only by explicit configuration with a static startup warning. Original prompt,
+LLM output, and final-output SHA-256 hashes plus the content mode are persisted.
+Known free-text evidence fields are scrubbed outside raw mode. Required held
+review content remains solely in the authenticated, tenant-authorized review
+workflow.
+
+The health endpoint now checks PostgreSQL with `SELECT 1`, queries Qdrant
+availability, inspects LLM configuration without generation, and reports only
+real active dependencies as `ok`, `degraded`, or `unhealthy`. CORS uses explicit
+origins and headers. Startup validates all auth JSON, audit mode, boolean, and
+origin configuration without logging secrets.
+
+Unused Redis runtime configuration was removed. Active documentation now
+truthfully describes the deterministic YAML policy engine, application-level
+instrumentation, and PostgreSQL audit trail; OPA/Rego and OpenTelemetry appear
+only as optional production extensions. The dashboard sends the configured
+tenant API key through its shared request helper and never bundles a reviewer
+key. `.env.example` documents the active configuration with placeholders.
+
+Created `.env.example`, `core/config.py`, `core/health.py`, `core/security.py`,
+`data/audit_privacy.py`, `tests/test_phase5_enterprise_hardening.py`, and the
+dashboard lockfile. Modified the API routes/schemas, audit/review persistence and
+schema, application startup/health/logging, active pipeline comments, Docker and
+dashboard configuration/components, README, `.gitignore`, the Phase 4 offline
+store boundary, `phase.md`, and this append-only log. The authoritative
+`phase.md` contains the exact per-file list and full design record.
+
+The 46-case adversarial suite covers tenant/reviewer auth and spoofing,
+cross-tenant isolation, secret-free logs/errors, all audit privacy modes and
+failure behavior, hashes/evidence scrubbing/persistence, startup validation,
+real health states and no generation, safe CORS, runtime/claim cleanup,
+dashboard headers, and retained Phase 3/4 invariants.
+
+Final verification: compile exit `0`; Phase 1 `21 passed, 18 warnings`; Phase 2
+`13 passed, 6 warnings`; Phase 3 `37 passed, 3 warnings`; Phase 4 `34 passed, 10
+warnings`; Phase 5 `46 passed, 7 warnings`; full suite `321 passed, 44 warnings`.
+The dashboard production build transformed 2,424 modules and succeeded; its only
+warning was the non-failing >500 kB main bundle advisory. Python warnings remain
+the existing Pydantic `datetime.utcnow()` deprecation, with no failures/skips.
+
+Remaining limitations include environment-based key lifecycle, intentional
+auth-disabled local mode, no live-service integration requirement in offline
+tests, necessary held-review retention without encryption/retention jobs, and a
+public dashboard build-time tenant demo key. Phase 6 benchmarking, metrics,
+top-k trust correction, Governance Receipt, and competition scenarios remain
+untouched.
+
+**Current phase:** Phase 5 — COMPLETE
+**Next phase:** Phase 6 — Final Benchmark + Demo Readiness (not started).

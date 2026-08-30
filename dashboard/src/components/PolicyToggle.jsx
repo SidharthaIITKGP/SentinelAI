@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Settings, Play, CheckCircle, XCircle, Loader2 } from 'lucide-react';
-import { RiskBadge, ActionBadge, API_BASE } from './shared.jsx';
+import { RiskBadge, ActionBadge, API_BASE, TENANT_HEADERS } from './shared.jsx';
 
 const USE_CASES = [
   {
@@ -79,7 +79,7 @@ export default function PolicyToggle() {
     try {
       const res = await fetch(`${API_BASE}/intercept`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...TENANT_HEADERS },
         body: JSON.stringify({
           prompt: promptText,
           use_case: policy.id,

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Search, Download, FileText } from 'lucide-react';
-import { RiskBadge, ActionBadge, formatTs, API_BASE } from './shared.jsx';
+import { RiskBadge, ActionBadge, formatTs, API_BASE, TENANT_HEADERS } from './shared.jsx';
 
 const ALL_ACTIONS = ['ALL', 'ALLOW', 'REDACT', 'BLOCK', 'REPAIR', 'ESCALATE'];
 const ALL_RISKS   = ['ALL', 'LOW', 'MEDIUM', 'HIGH'];
@@ -38,7 +38,7 @@ export default function AuditLog() {
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch(`${API_BASE}/audit/recent?limit=200`);
+      const res = await fetch(`${API_BASE}/audit/recent?limit=200`, { headers: TENANT_HEADERS });
       if (res.ok) setRows(await res.json());
     } catch {}
   };

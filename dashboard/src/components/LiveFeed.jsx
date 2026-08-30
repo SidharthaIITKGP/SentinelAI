@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Radio } from 'lucide-react';
-import { RiskBadge, ActionBadge, formatTs, API_BASE } from './shared.jsx';
+import { RiskBadge, ActionBadge, formatTs, API_BASE, TENANT_HEADERS } from './shared.jsx';
 
 export default function LiveFeed({ onRowClick }) {
   const [rows, setRows] = useState([]);
@@ -9,7 +9,7 @@ export default function LiveFeed({ onRowClick }) {
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch(`${API_BASE}/audit/recent?limit=20`);
+      const res = await fetch(`${API_BASE}/audit/recent?limit=20`, { headers: TENANT_HEADERS });
       if (res.ok) {
         const data = await res.json();
         setRows(data);

@@ -60,3 +60,7 @@ export function formatTs(iso) {
 }
 
 export const API_BASE = import.meta.env.VITE_API_URL || '';
+const tenantApiKey = import.meta.env.VITE_SENTINEL_API_KEY || '';
+export const TENANT_HEADERS = tenantApiKey
+  ? { 'X-Sentinel-API-Key': tenantApiKey }
+  : {};

@@ -10,8 +10,8 @@ Orchestrates the 5-step governance pipeline:
   Step 5 — ACT+LOG:        take governed action, write to audit log
 
 Engine ownership in the existing prototype:
-  Aman:   pii_detector, bias_detector, policy/engine
-  Gaurav: model_router, audit_logger
+  Responsibility: PII, bias, and deterministic policy-as-code
+  Efficiency/persistence: model router and route-owned audit logger
   Self:   injection_detector, groundedness, risk_scorer, action_layer
 """
 
@@ -53,32 +53,32 @@ ROUTING_FAILURE_MESSAGE = (
 )
 
 
-# ── Sidhartha's own engine modules (stubbed until Day 2) ──────────────────────
+# ── Core engine imports with fail-safe availability fallbacks ─────────────────
 try:
     from core.injection_detector import scan as injection_scan
     from core.injection_detector import scan_toxic_content
 except ImportError:
     injection_scan = None
     scan_toxic_content = None
-    logger.warning("injection_detector not found — stubbed")
+    logger.warning("Injection detector unavailable; fail-safe fallback active")
 
 try:
     from engines.trust.groundedness import check as groundedness_check
 except ImportError:
     groundedness_check = None
-    logger.warning("groundedness not found — stubbed")
+    logger.warning("Groundedness engine unavailable; fail-safe fallback active")
 
 try:
     from core.risk_scorer import compute as compute_risk
 except ImportError:
     compute_risk = None
-    logger.warning("risk_scorer not found — stubbed")
+    logger.warning("Risk scorer unavailable; fail-safe fallback active")
 
 try:
     from core.action_layer import execute as execute_action
 except ImportError:
     execute_action = None
-    logger.warning("action_layer not found — stubbed")
+    logger.warning("Action layer unavailable; fail-safe fallback active")
 
 try:
     from core.action_layer import BLOCK_MESSAGES, DEFAULT_BLOCK_MESSAGE
@@ -87,27 +87,27 @@ except ImportError:
     DEFAULT_BLOCK_MESSAGE = "I'm unable to process this request."
     logger.warning("action_layer constants not found — using defaults")
 
-# ── Aman's modules (stubbed until Day 3) ──────────────────────────────────────
+# ── Responsibility engine imports ─────────────────────────────────────────────
 try:
     from engines.responsibility.pii_detector import detect_pii
 except ImportError:
     detect_pii = None
-    logger.warning("pii_detector not found — stubbed (Aman's module)")
+    logger.warning("PII detector unavailable; fail-safe fallback active")
 
 try:
     from engines.responsibility.bias_detector import detect_bias
 except ImportError:
     detect_bias = None
-    logger.warning("bias_detector not found — stubbed (Aman's module)")
+    logger.warning("Bias detector unavailable; fail-safe fallback active")
 
 try:
     from policy.engine import evaluate_policy, fallback_policy_decision
 except ImportError:
     evaluate_policy = None
     fallback_policy_decision = None
-    logger.warning("policy engine not found — stubbed (Aman's module)")
+    logger.warning("Policy engine unavailable; fail-safe fallback active")
 
-# ── Gaurav's modules (stubbed until Day 3) ────────────────────────────────────
+# ── Efficiency engine import ──────────────────────────────────────────────────
 try:
     from engines.efficiency.model_router import (
         evaluate_efficiency,
@@ -122,7 +122,7 @@ except ImportError:
     hard_routing_failures = None
     has_hard_routing_failure = None
     routing_from_model_config = None
-    logger.warning("model_router not found — stubbed (Gaurav's module)")
+    logger.warning("Model router unavailable; deterministic fallback active")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Central LiteLLM call used for initial generation and a bounded repair attempt
@@ -233,7 +233,7 @@ async def _call_llm(prompt: str, model_config, use_case: str = "hr_copilot") -> 
         return response_text, tokens_input, tokens_output
 
     except Exception as e:
-        logger.error(f"LLM call failed | model={model} | error={str(e)}")
+        logger.error("LLM call failed | model=%s | error_type=%s", model, type(e).__name__)
         # Safe fallback — never let LLM failure crash the pipeline
         fallback = (
             "I'm unable to process this request at the moment. "
@@ -391,7 +391,7 @@ async def run_pipeline(
     logger.info(f"[{request_id}] Step 1: SCAN starting...")
 
     # Injection detection
-    # REAL (Day 2): injection_result = await injection_scan(request.prompt)
+    # Run the configured injection engine, or retain explicit unavailable state.
     if injection_scan is not None:
         try:
             injection_result = await injection_scan(request.prompt)
@@ -404,7 +404,7 @@ async def run_pipeline(
             injection_result = _mock_injection_result()
     else:
         injection_result = _mock_injection_result()
-        logger.debug(f"[{request_id}] injection_scan stubbed")
+        logger.debug(f"[{request_id}] injection_scan unavailable")
 
     # Early exit: critical injection → immediate BLOCK
     if injection_result.detected and injection_result.confidence >= 0.90:
@@ -467,13 +467,12 @@ async def run_pipeline(
         )
         return block_result, audit_entry
 
-    # PII scan on prompt (Aman's module)
-    # REAL (Day 3): pii_prompt_result = await detect_pii(request.prompt)
+    # PII scan on prompt.
     if detect_pii is not None:
         pii_prompt_result = await detect_pii(request.prompt)
     else:
         pii_prompt_result = _mock_pii_result("prompt")
-        logger.debug(f"[{request_id}] detect_pii (prompt) stubbed — Aman's module")
+        logger.debug(f"[{request_id}] detect_pii (prompt) unavailable")
 
     # Prompt safety check — detect harmful/toxic prompts
     # Catches sexual harassment, violence, illegal instructions etc.
@@ -626,7 +625,7 @@ async def run_pipeline(
     step_start = time.time()
     logger.info(f"[{request_id}] Step 2: CLASSIFY starting...")
 
-    # TODO Day 2: implement more sophisticated classification logic
+    # Deterministic preliminary classification feeds capability-first routing.
     # Real logic considers:
     #   - injection_result.confidence
     #   - pii_prompt_result.risk_score
@@ -672,7 +671,7 @@ async def run_pipeline(
             model_config = route_model(preliminary_risk_level, request.use_case)
     else:
         model_config = _mock_model_config()
-        logger.debug(f"[{request_id}] route_model stubbed — Gaurav's module")
+        logger.debug(f"[{request_id}] route_model unavailable; using fallback")
 
     routing_result = (
         routing_from_model_config(
@@ -810,8 +809,8 @@ async def run_pipeline(
     # is deterministic and local, so it adds no model call.
     #
     # Engine A: groundedness.py    → is the response factually grounded?
-    # Engine B: pii_detector.py    → does the response contain PII? (Aman)
-    # Engine C: bias_detector.py   → does the response contain bias? (Aman)
+    # Engine B: pii_detector.py    → does the response contain PII?
+    # Engine C: bias_detector.py   → does the response contain bias?
     #
     # ──────────────────────────────────────────────────────────────────────
     step_start = time.time()
@@ -829,7 +828,7 @@ async def run_pipeline(
                     request_id,
                     type(exc).__name__,
                 )
-        logger.debug(f"[{request_id}] groundedness_check stubbed")
+        logger.debug(f"[{request_id}] groundedness_check unavailable")
         return _mock_groundedness_result(request.use_case)
 
     async def _run_pii_response():
@@ -839,7 +838,7 @@ async def run_pipeline(
             result.scan_target = "response"
             return result
         logger.debug(
-            f"[{request_id}] detect_pii (response) stubbed — Aman's module"
+            f"[{request_id}] detect_pii (response) unavailable"
         )
         return _mock_pii_result("response")
 
@@ -852,7 +851,7 @@ async def run_pipeline(
           - Biased user requests that the LLM might partially fulfill (prompt scanning)
         """
         if detect_bias is None:
-            logger.debug(f"[{request_id}] detect_bias stubbed — Aman's module")
+            logger.debug(f"[{request_id}] detect_bias unavailable")
             return _mock_bias_result()
 
         # Run prompt and response bias scans in parallel
@@ -912,7 +911,7 @@ async def run_pipeline(
     # ──────────────────────────────────────────────────────────────────────
     # STEP 5 — ACT + LOG
     # Combine all engine results into a risk score.
-    # Get policy decision from OPA (Aman's module).
+    # Get a decision from the deterministic YAML policy-as-code engine.
     # Execute the governed action.
     # Log everything to audit trail (non-blocking).
     # ──────────────────────────────────────────────────────────────────────
@@ -920,7 +919,7 @@ async def run_pipeline(
     logger.info(f"[{request_id}] Step 5: ACT + LOG starting...")
 
     # Risk scoring
-    # REAL (Day 2): risk_score = compute_risk(injection_result, pii_prompt_result, ...)
+    # Combine detector results into the configured use-case risk score.
     if compute_risk is not None:
         risk_score = compute_risk(
             injection=injection_result,
@@ -932,7 +931,7 @@ async def run_pipeline(
         )
     else:
         risk_score = _mock_risk_score(request.use_case, preliminary_risk_level)
-        logger.debug(f"[{request_id}] compute_risk stubbed")
+        logger.debug(f"[{request_id}] compute_risk unavailable; using fail-safe score")
 
     unavailable_detectors = [
         name
@@ -1036,7 +1035,7 @@ async def run_pipeline(
         return repaired, recheck
 
     # Action execution
-    # REAL (Day 2): action_result = await execute_action(policy_decision, risk_score, ...)
+    # Execute the governed action selected by policy.
     if execute_action is not None:
         action_result = await execute_action(
             policy_decision=policy_decision,
@@ -1124,7 +1123,7 @@ def _classify_risk(
 ) -> RiskLevel:
     """
     Assigns preliminary risk level based on scan results.
-    TODO Day 2: expand with more sophisticated logic.
+    This classifier remains deliberately deterministic and explainable.
 
     Rules:
       - Any injection detected → HIGH
@@ -1185,7 +1184,7 @@ def _build_audit_entry(
 ) -> AuditEntry:
     """
     Constructs the complete AuditEntry for one pipeline run.
-    This gets written to PostgreSQL by audit_logger.py (Gaurav's module).
+    This gets written to PostgreSQL by the route-owned audit logger.
     """
     return AuditEntry(
         request_id=request_id,

@@ -10,7 +10,7 @@ Weight logic:
   finance_tool     → weights groundedness highest — financial claims must be sourced
 
 Called in Step 5 of pipeline.py after asyncio.gather completes.
-Real implementation replaces the mock return on Day 2.
+The implementation is deterministic and configured per use case.
 """
 
 from __future__ import annotations

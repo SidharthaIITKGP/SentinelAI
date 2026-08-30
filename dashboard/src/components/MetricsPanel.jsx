@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Activity, TrendingUp, Clock, ShieldOff, AlertTriangle, Zap } from 'lucide-react';
-import { API_BASE } from './shared.jsx';
+import { API_BASE, TENANT_HEADERS } from './shared.jsx';
 
 const CARD_DEFS = [
   { key: 'requests',   icon: Activity,      label: 'Requests',      sub: 'Last 24h',        color: '#A78BFA' },
@@ -44,7 +44,7 @@ export default function MetricsPanel() {
 
   const fetchMetrics = async () => {
     try {
-      const res = await fetch(`${API_BASE}/metrics?period=24h`);
+      const res = await fetch(`${API_BASE}/metrics?period=24h`, { headers: TENANT_HEADERS });
       if (res.ok) {
         const data = await res.json();
         setMetrics(data);

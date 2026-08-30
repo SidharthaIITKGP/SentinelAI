@@ -67,25 +67,30 @@ class MemoryStore:
         if audit.request_id not in {item.request_id for item in self.enqueued}:
             self.enqueued.append(audit)
 
-    async def list(self, status, use_case, limit):
+    async def list(self, status, use_case, limit, allowed_tenants=None):
         status = status.value if hasattr(status, "value") else status
         rows = [r for r in self.records.values() if r.status == status]
         if use_case:
             rows = [r for r in rows if r.use_case == use_case]
+        if allowed_tenants is not None:
+            rows = [r for r in rows if r.tenant_id in allowed_tenants]
         rows.sort(key=lambda r: (r.created_at, r.review_id))
         return [ReviewSummary(**r.model_dump(exclude={
             "original_response", "action_evidence", "groundedness_evidence",
             "efficiency_evidence", "reviewer_id", "reviewer_notes", "edited_response",
         })) for r in rows[:limit]]
 
-    async def get(self, request_id):
+    async def get(self, request_id, allowed_tenants=None):
         if request_id not in self.records:
             raise ReviewNotFoundError(request_id)
-        return self.records[request_id]
+        record = self.records[request_id]
+        if allowed_tenants is not None and record.tenant_id not in allowed_tenants:
+            raise ReviewNotFoundError(request_id)
+        return record
 
-    async def decide(self, request_id, decision):
+    async def decide(self, request_id, decision, allowed_tenants=None):
         async with self.lock:
-            record = await self.get(request_id)
+            record = await self.get(request_id, allowed_tenants)
             if record.status != "PENDING":
                 raise ReviewConflictError(request_id)
             status = {"APPROVE": "APPROVED", "EDIT": "EDITED", "REJECT": "REJECTED"}[decision.decision]
@@ -100,9 +105,10 @@ class MemoryStore:
             self.feedback.append((request_id, record.review_id, correct))
             return updated
 
-    async def metrics(self):
-        counts = {s: sum(r.status == s for r in self.records.values()) for s in ("PENDING", "APPROVED", "EDITED", "REJECTED")}
-        total = len(self.records)
+    async def metrics(self, allowed_tenants=None):
+        rows = [r for r in self.records.values() if allowed_tenants is None or r.tenant_id in allowed_tenants]
+        counts = {s: sum(r.status == s for r in rows) for s in ("PENDING", "APPROVED", "EDITED", "REJECTED")}
+        total = len(rows)
         completed = total - counts["PENDING"]
         return ReviewMetrics(
             total_reviews=total, pending_reviews=counts["PENDING"],
@@ -113,13 +119,13 @@ class MemoryStore:
             agreement_rate=(counts["EDITED"] + counts["REJECTED"]) / completed if completed else 0,
         )
 
-    async def create_feedback(self, item):
+    async def create_feedback(self, item, allowed_tenants=None):
         if item.request_id not in self.audits:
             raise ReviewNotFoundError(item.request_id)
         self.feedback.append(item)
         return "feedback-1"
 
-    async def get_feedback(self, request_id):
+    async def get_feedback(self, request_id, allowed_tenants=None):
         if request_id not in self.audits:
             raise ReviewNotFoundError(request_id)
         return [FeedbackRecord(

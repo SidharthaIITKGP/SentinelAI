@@ -1,8 +1,8 @@
 """
 SentinelAI — FastAPI Application Entry Point
 
-Starts the server, registers all routes, initializes service connections on startup.
-All service initialization is stubbed — real connections wired in Day 2-3.
+Starts the server, registers routes, validates configuration, and initializes
+the dependencies used by the executable prototype.
 """
 
 from __future__ import annotations
@@ -10,13 +10,17 @@ from __future__ import annotations
 import logging
 import os
 import time
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.routes import feedback, intercept, metrics, reviews
 from api.routes.responsibility import router as responsibility_router
 from api.schemas import HealthResponse
+from core import health
+from core.config import load_runtime_config, validate_runtime_config
 
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
@@ -30,6 +34,12 @@ logger = logging.getLogger("sentinelai")
 
 # ── Startup timer ──────────────────────────────────────────────────────────────
 START_TIME = time.time()
+RUNTIME_CONFIG = load_runtime_config()
+
+
+def warn_for_raw_audit_mode(audit_content_mode: str) -> None:
+    if audit_content_mode == "raw":
+        logger.warning("Raw audit content storage is enabled.")
 
 
 # ── Lifespan (modern replacement for deprecated @app.on_event) ─────────────────
@@ -42,6 +52,9 @@ async def lifespan(app: FastAPI):
     logger.info("SentinelAI starting up...")
     logger.info("=" * 50)
 
+    config = validate_runtime_config()
+    warn_for_raw_audit_mode(config.audit_content_mode)
+
     # Step 1 — Load knowledge base (requires Qdrant)
     logger.info("[1/5] Loading knowledge base from sample_docs.json...")
     try:
@@ -49,7 +62,7 @@ async def lifespan(app: FastAPI):
         await initialize_knowledge_base(qdrant_host=QDRANT_HOST, qdrant_port=QDRANT_PORT)
         logger.info("[1/5] Knowledge base loaded ✅")
     except Exception as exc:
-        logger.warning(f"[1/5] Knowledge base / Qdrant unavailable (non-fatal): {exc}")
+        logger.warning("[1/5] Knowledge base / Qdrant unavailable (non-fatal): %s", type(exc).__name__)
         logger.warning("[1/5] Groundedness checks will be skipped until Qdrant is reachable.")
 
     # Step 2 — Initialize injection detector
@@ -59,7 +72,7 @@ async def lifespan(app: FastAPI):
         await init_injection_detector(qdrant_host=QDRANT_HOST, qdrant_port=QDRANT_PORT)
         logger.info("[2/5] Injection detector initialized ✅")
     except Exception as exc:
-        logger.warning(f"[2/5] Injection detector init failed (non-fatal): {exc}")
+        logger.warning("[2/5] Injection detector init failed (non-fatal): %s", type(exc).__name__)
 
     # Step 3 — Connect to PostgreSQL
     logger.info("[3/5] Connecting to PostgreSQL...")
@@ -68,7 +81,7 @@ async def lifespan(app: FastAPI):
         await init_db()
         logger.info("[3/5] PostgreSQL connected ✅")
     except Exception as exc:
-        logger.warning(f"[3/5] PostgreSQL connection failed (non-fatal): {exc}")
+        logger.warning("[3/5] PostgreSQL connection failed (non-fatal): %s", type(exc).__name__)
 
     # Step 4 — Initialize Presidio PII analyzer
     logger.info("[4/5] Initializing Presidio PII analyzer...")
@@ -77,7 +90,7 @@ async def lifespan(app: FastAPI):
         get_pii_detector()  # warms up Presidio singleton on startup
         logger.info("[4/5] Presidio initialized ✅")
     except Exception as exc:
-        logger.warning(f"[4/5] Presidio PII analyzer init failed (non-fatal): {exc}")
+        logger.warning("[4/5] Presidio PII analyzer init failed (non-fatal): %s", type(exc).__name__)
 
     # Step 5 — Initialize Policy Engine
     logger.info("[5/5] Loading policy engine...")
@@ -86,7 +99,7 @@ async def lifespan(app: FastAPI):
         get_policy_engine()  # warms up policy engine singleton on startup
         logger.info("[5/5] Policy engine initialized ✅")
     except Exception as exc:
-        logger.warning(f"[5/5] Policy engine init failed (non-fatal): {exc}")
+        logger.warning("[5/5] Policy engine init failed (non-fatal): %s", type(exc).__name__)
 
 
 
@@ -124,45 +137,22 @@ app = FastAPI(
 # ── CORS middleware ────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],        # dashboard needs this
+    allow_origins=list(RUNTIME_CONFIG.cors_origins),
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Content-Type", "Authorization", "X-Sentinel-API-Key",
+        "X-Sentinel-Reviewer-Key",
+    ],
 )
 
 
 # ── Route registration ────────────────────────────────────────────────────────
-# Wrapped in try/except so the server starts even if route files aren't built yet
-
 app.include_router(responsibility_router)
-
-try:
-    from api.routes import intercept
-    app.include_router(intercept.router, tags=["Intercept"])
-    logger.info("Intercept routes registered")
-except ImportError:
-    logger.warning("api/routes/intercept.py not found — skipping (Gaurav builds this)")
-
-try:
-    from api.routes import metrics
-    app.include_router(metrics.router, tags=["Metrics"])
-    logger.info("Metrics routes registered")
-except ImportError:
-    logger.warning("api/routes/metrics.py not found — skipping (Gaurav builds this)")
-
-try:
-    from api.routes import feedback
-    app.include_router(feedback.router, tags=["Feedback"])
-    logger.info("Feedback routes registered")
-except ImportError:
-    logger.warning("api/routes/feedback.py not found — skipping (Sidhartha builds this)")
-
-try:
-    from api.routes import reviews
-    app.include_router(reviews.router, tags=["Human Review"])
-    logger.info("Human-review routes registered")
-except ImportError:
-    logger.warning("api/routes/reviews.py not found — skipping")
+app.include_router(intercept.router, tags=["Intercept"])
+app.include_router(metrics.router, tags=["Metrics"])
+app.include_router(feedback.router, tags=["Feedback"])
+app.include_router(reviews.router, tags=["Human Review"])
 
 
 # ── Health check endpoint ──────────────────────────────────────────────────────
@@ -174,23 +164,27 @@ except ImportError:
     description="Returns the current health status of SentinelAI and all dependent services.",
 )
 async def health_check():
-    """
-    Health check endpoint.
-    Returns status of all dependent services.
-    Services show False until real connections are wired in Day 2-3.
-    """
+    """Report live dependency checks without performing an LLM generation."""
     uptime = time.time() - START_TIME
 
-    # TODO Day 2-3: replace False with actual connectivity checks
-    # e.g. qdrant_healthy = await check_qdrant_connection()
+    postgres_ok, qdrant_ok = await asyncio.gather(
+        health.check_postgresql(), health.check_qdrant()
+    )
+    llm_configured = health.llm_is_configured()
+    if postgres_ok and qdrant_ok and llm_configured:
+        status = "ok"
+    elif not postgres_ok and not qdrant_ok and not llm_configured:
+        status = "unhealthy"
+    else:
+        status = "degraded"
 
     return HealthResponse(
-        status="ok",
+        status=status,
         services={
-            "qdrant": False,       # TODO: wire real check Day 2
-            "postgres": False,     # TODO: wire real check Day 3
-            "redis": False,        # TODO: wire real check Day 3
-            "opa": False,          # TODO: wire real check Day 3 — Aman's module
+            "api": True,
+            "postgresql": postgres_ok,
+            "qdrant": qdrant_ok,
+            "llm_configured": llm_configured,
         },
         version="1.0.0",
         uptime_seconds=round(uptime, 2),

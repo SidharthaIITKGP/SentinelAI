@@ -18,9 +18,9 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 
 ## Current Status
 
-**Current phase:** Phase 4 — COMPLETE
-**Completed phases:** Phase 1 — Governance correctness and safety; Phase 2 — Groundedness uncertainty and real repair; Phase 3 — Real Efficiency Engine and Model Routing; Phase 4 — Human Review and Feedback Loop
-**Next phase:** Phase 5 — Enterprise Hardening and Claim Cleanup
+**Current phase:** Phase 5 — COMPLETE
+**Completed phases:** Phase 1 — Governance correctness and safety; Phase 2 — Groundedness uncertainty and real repair; Phase 3 — Real Efficiency Engine and Model Routing; Phase 4 — Human Review and Feedback Loop; Phase 5 — Enterprise Hardening and Complete System Integration
+**Next phase:** Phase 6 — Final Benchmark + Demo Readiness
 
 ### Baseline verification observed on 2026-08-30
 
@@ -51,11 +51,15 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 - Phase 3 added structured cost, latency, model-fit, and overall efficiency evaluation.
 - Human review, resolution, reviewer feedback, and review metrics are implemented in Phase 4.
 - Multi-turn/session risk is not implemented.
-- Audit persistence retains raw prompt/response content by default.
-- Tenant authentication is claimed conceptually but not implemented.
-- `/health` reports hard-coded dependency states.
-- Redis is provisioned but not meaningfully used.
-- OPA and OpenTelemetry are mentioned in architecture/context but are not actually integrated in the executable prototype.
+- Audit persistence now defaults to redacted content, supports metadata-only and
+  explicit raw modes, and stores integrity hashes.
+- Lightweight tenant/reviewer authentication and database-level tenant filters
+  were implemented in Phase 5.
+- `/health` now performs real PostgreSQL/Qdrant checks and reports LLM
+  configuration without generation.
+- Unused Redis was removed from active runtime configuration.
+- Active documentation now accurately describes YAML policy-as-code and
+  application-level instrumentation; OPA/OpenTelemetry are optional extensions.
 - Evaluation metrics such as precision, recall, false-positive rate, false-negative rate, action accuracy, and P95 governance latency are missing.
 
 ---
@@ -833,3 +837,243 @@ competition demo suite remain deferred and unchanged.
 
 **Next phase:** Phase 5 — Enterprise Hardening and Claim Cleanup. Do not begin
 without review/authorization.
+
+---
+
+## Phase 5 — Enterprise Hardening and Complete System Integration
+
+**Phase status:** COMPLETE
+
+### Exact files created or modified
+
+Created:
+
+- `.env.example`
+- `core/config.py`
+- `core/health.py`
+- `core/security.py`
+- `dashboard/package-lock.json`
+- `data/audit_privacy.py`
+- `tests/test_phase5_enterprise_hardening.py`
+
+Modified:
+
+- `.gitignore`
+- `README.md`
+- `api/routes/feedback.py`
+- `api/routes/intercept.py`
+- `api/routes/metrics.py`
+- `api/routes/reviews.py`
+- `api/schemas.py`
+- `core/action_layer.py`
+- `core/injection_detector.py`
+- `core/main.py`
+- `core/pipeline.py`
+- `core/risk_scorer.py`
+- `dashboard/Dockerfile.dashboard`
+- `dashboard/src/components/AuditLog.jsx`
+- `dashboard/src/components/ChartsRow.jsx`
+- `dashboard/src/components/LiveFeed.jsx`
+- `dashboard/src/components/MetricsPanel.jsx`
+- `dashboard/src/components/PolicyToggle.jsx`
+- `dashboard/src/components/shared.jsx`
+- `data/audit_logger.py`
+- `data/review_store.py`
+- `data/schema.sql`
+- `docker-compose.yml`
+- `tests/test_phase4_human_review.py`
+- `phase.md`
+- `PHASE_HISTORY.md`
+
+### Authentication and tenant isolation design
+
+- `X-Sentinel-API-Key` maps to an authoritative tenant through validated
+  `SENTINEL_TENANT_API_KEYS_JSON`. With `SENTINEL_AUTH_ENABLED=true`, missing or
+  invalid keys return `401`, and a body tenant conflicting with the credential
+  returns `403`. The authenticated tenant is copied into pipeline, audit, and
+  review records.
+- `X-Sentinel-Reviewer-Key` maps to server-side reviewer identity and a non-empty
+  tenant allowlist. Review list/detail/decision/resolution/metrics and feedback
+  endpoints require it when authentication is enabled. Submitted reviewer IDs
+  are overwritten by the credential-derived identity.
+- Review, resolution, decision, feedback, audit-list, governance-metric, and
+  review-metric database queries apply tenant predicates before returning rows.
+  Cross-tenant review/feedback requests consistently return `404` to reduce
+  enumeration. Local development retains the documented auth-disabled mode.
+- No API-key value is placed in an error or log. Active logs retain identifiers,
+  types/counts, action/risk/model/latency/token data, and exception class names,
+  but not prompt/response snippets or provider output.
+
+### Audit privacy, hashing, and review safety
+
+- `SENTINEL_AUDIT_CONTENT_MODE` accepts `redacted`, `metadata_only`, or `raw` and
+  defaults to `redacted`. Startup rejects any other value.
+- Redacted mode reuses the existing secret detector and Presidio anonymizer for
+  prompt, raw LLM response, and final response. Any sanitization error replaces
+  the complete value with `[CONTENT WITHHELD: SANITIZATION FAILED]`; raw fallback
+  is impossible.
+- Metadata-only mode stores fixed omission markers plus lengths/metadata already
+  present in the audit model, never request/response text. Explicit raw mode is
+  the only path retaining audit content and emits the static startup warning
+  `Raw audit content storage is enabled.` without logging content.
+- SHA-256 hashes of the original prompt, original LLM response, and final
+  response are persisted with `audit_content_mode`. They are labeled for
+  correlation/integrity and are not described as encryption.
+- Known free-text fields inside action and groundedness evidence are scrubbed in
+  redacted/metadata-only modes. PII evidence contains only safe types, offsets,
+  and placeholders.
+- Raw held review output remains only in the authoritative `human_reviews` state
+  needed for review and is accessible solely through authenticated,
+  tenant-authorized reviewer routes. Intercept, PENDING, REJECTED, and
+  cross-tenant paths retain Phase 4 non-leakage behavior.
+
+### Health, runtime configuration, and CORS
+
+- Health now reports only API, PostgreSQL, Qdrant, and LLM configuration.
+  PostgreSQL runs `SELECT 1` under a short timeout; Qdrant performs a lightweight
+  collection availability call; LLM health checks configuration presence only
+  and never generates. Overall status is `ok`, `degraded`, or `unhealthy`, and
+  cannot be `ok` when dependencies fail.
+- Startup validates booleans, JSON credential structures, required mappings,
+  audit mode, and explicit CORS origins. Validation errors name the invalid
+  variable but never its secret value.
+- CORS defaults to localhost/127.0.0.1 Vite origins, never combines wildcard
+  origin with credentials, and explicitly permits content, authorization, tenant
+  key, and reviewer key headers.
+- `.env.example` documents every active service, auth, privacy, CORS, and
+  dashboard build setting with replaceable non-secret placeholders.
+
+### Runtime and claim cleanup
+
+- Removed the unused Redis service, volume, dependency, URL, health claim, and
+  README stack claim. No Redis implementation was added.
+- Active documentation calls the executable evaluator deterministic YAML
+  policy-as-code. OPA/Rego is documented only as a replaceable production
+  adapter; OpenTelemetry exporters only as a production extension.
+- The README now separates the current Round-2 prototype from optional production
+  extensions and describes application-level latency/token/cost instrumentation
+  plus the PostgreSQL audit trail accurately.
+- Replaced stale Day 2/Day 3/stub/individual-owner comments in active pipeline,
+  route, audit, and risk code with current implementation/fail-safe wording.
+- Dashboard requests use `VITE_SENTINEL_API_KEY` through a shared tenant-header
+  helper. No reviewer credential is added to the public frontend bundle. Docker
+  builds pass Vite variables at build time, which matches Vite semantics.
+
+### Tests added and exact results
+
+- Added 46 adversarial Phase 5 cases covering missing/invalid/valid credentials,
+  tenant spoofing, authenticated audit/review identity, secret-free errors/logs,
+  anonymous and wrong-credential review denial, reviewer spoof prevention,
+  cross-tenant review/resolution/feedback isolation, tenant-scoped metrics/audit,
+  default email/SSN/secret redaction, sanitizer failure, metadata-only/raw modes,
+  deterministic hashes, evidence scrubbing, persistence integration, raw-mode
+  warning, malformed startup configuration, real health states, no generation in
+  health, explicit CORS, Redis/claim cleanup, env/dashboard support, schema
+  hashes, and preserved Phase 3/4 security invariants.
+- Phase 4's offline store gained tenant-aware method signatures and filtering;
+  none of its governance assertions were weakened.
+- Before edits: compile exit `0`; full suite
+  `275 passed, 37 warnings in 13.81s`.
+- Final `.venv/bin/python -m compileall -q .`: exit `0`, no output.
+- Final Phase 1: `21 passed, 18 warnings in 7.64s`.
+- Final Phase 2: `13 passed, 6 warnings in 6.62s`.
+- Final Phase 3: `37 passed, 3 warnings in 6.82s`.
+- Final Phase 4: `34 passed, 10 warnings in 7.65s`.
+- Final Phase 5: `46 passed, 7 warnings in 8.33s`.
+- Final full suite: `321 passed, 44 warnings in 12.18s`.
+- Final dashboard `npm run build`: exit `0`; 2,424 modules transformed and build
+  completed in `3.31s`. Vite emitted a non-failing warning that the main bundle
+  exceeds 500 kB after minification.
+- Python warnings remain the existing Pydantic exposure of `datetime.utcnow()`
+  deprecation. No Python test failed or was skipped.
+
+### Test-quality self-review
+
+1. **Could arbitrary body tenant_id still control tenant identity and pass
+   tests?** No. Valid-key persistence and conflicting-body `403` cases assert the
+   credential mapping is authoritative.
+2. **Could anonymous users read held review responses?** No. Every review and
+   feedback GET surface is parameterized to require reviewer authentication.
+3. **Could tenant A access tenant B?** No. Detail, resolution, feedback, queue,
+   metrics, and audit paths test tenant filters and cross-tenant `404` behavior.
+4. **Could API keys appear in logs?** No. A unique invalid key is asserted absent
+   from both the HTTP response and captured logs; active sensitive log sites were
+   removed.
+5. **Could raw PII be stored in default audit mode?** No. Email, SSN-like, and
+   credential values are tested through the default redacted preparation path.
+6. **Could sanitization failure fall back to raw content?** No. Forced detector
+   failure must replace all content with the fixed withholding marker.
+7. **Could health still return fake statuses?** No. Four dependency combinations
+   verify `ok`/`degraded`/`unhealthy`, actual check functions are isolated, and
+   Redis/OPA keys are forbidden.
+8. **Could wildcard CORS remain enabled?** No. Preflight requires the explicit
+   configured origin and tenant header, and asserts the response is not `*`.
+9. **Could reviewer_id still be spoofed?** No. An authenticated decision submits
+   a false ID and must persist/return the credential-derived reviewer.
+10. **Could previous governance behavior regress undetected?** No. Phase 1–4 are
+    rerun independently and in the 321-test complete suite; hard-route no-call and
+    pending/rejected non-leakage assertions remain explicit.
+11. **Are tests testing behavior rather than private implementation details?**
+    Yes. Route tests exercise ASGI contracts and mock only external/database
+    boundaries; privacy/health/config tests exercise public module behavior.
+12. **Are there realistic negative/adversarial cases?** Yes: absent/wrong keys,
+    tenant and reviewer spoofing, cross-tenant enumeration, forced sanitizer
+    failure, malformed config, dependency outages, and misleading runtime claims.
+
+### Important design decisions
+
+- A single `SENTINEL_AUTH_ENABLED` switch governs lightweight demo tenant and
+  reviewer authentication. Enabled mode refuses startup unless both credential
+  maps are usable; disabled mode is explicitly local-development compatibility.
+- Reviewer tenant filtering occurs in SQL/store calls rather than fetching all
+  tenants then filtering serialized output. Cross-tenant absence and nonexistent
+  records intentionally share the same `404` response.
+- Audit sanitation happens immediately before persistence so pipeline and human
+  review behavior remain unchanged. Raw review content is not copied into the
+  redacted audit row.
+- Health durability failures degrade service state rather than hiding them, but
+  the endpoint itself remains available to support diagnosis.
+- Application API keys are appropriate only for this demo hardening phase;
+  enterprise identity and key lifecycle remain production extensions.
+
+### Known remaining limitations
+
+- Environment JSON mappings do not provide key rotation, expiry, rate limiting,
+  identity federation, or a secret-manager integration.
+- Authentication-disabled mode deliberately trusts body tenant IDs and exposes
+  reviewer routes for local development; it must not be used for a shared demo.
+- PostgreSQL/Qdrant behavior is mocked in the offline suite. Health contains real
+  checks, but deployment verification still requires running those services and
+  applying `data/schema.sql` to existing volumes.
+- Human review necessarily retains the held original. Encryption-at-rest,
+  retention/deletion jobs, and reviewer-access audit events are not implemented.
+- SHA-256 supports correlation/integrity only and is not encryption or a password
+  hashing scheme.
+- The dashboard includes a tenant demo key at build time, as requested. Browser
+  bundles cannot keep such a key secret; production should use user identity and
+  a backend session/token exchange.
+- The Vite build has a non-blocking main-bundle size warning; code splitting is
+  not needed for Phase 5 correctness.
+- Existing `datetime.utcnow()` deprecation warnings remain; changing all legacy
+  schema timestamps was outside this phase.
+
+### Phase 6 deferred issues
+
+No Phase 6 work was started. Benchmark datasets, precision/recall/FPR/FNR,
+final action-accuracy evaluation, the P95 benchmark suite, top-k trust
+correction, final Governance Receipt, benchmarked cost savings, and final
+competition demo scenarios remain deferred.
+
+### Phase 6 must preserve
+
+- Credential-derived tenant/reviewer identities and repository-level tenant
+  isolation across audit, review, resolution, feedback, and metrics.
+- Default fail-closed audit redaction, metadata-only/raw semantics, hashes, and
+  evidence scrubbing.
+- Authenticated access to held review content and Phase 4 resolution non-leakage.
+- Real health semantics, explicit CORS, secret-free logs, and accurate active
+  implementation claims.
+- Every Phase 1–5 safety/routing/review invariant and all 321 regression tests.
+
+**Next phase:** Phase 6 — Final Benchmark + Demo Readiness. Do not begin without
+review/authorization.

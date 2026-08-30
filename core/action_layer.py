@@ -150,7 +150,7 @@ async def execute(
     Executes the governed action determined by the policy engine.
 
     Args:
-        policy_decision: OPA policy engine's decision — which action to take
+        policy_decision: deterministic policy-as-code decision — which action to take
         risk_score:      Combined risk score from all engines
         llm_response:    Raw LLM response before any action
         pii_in_response: PII detected in the LLM response (used for REDACT)

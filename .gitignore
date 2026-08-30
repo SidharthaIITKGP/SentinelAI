@@ -79,7 +79,6 @@ runs/
 *.sqlite3
 postgres_data/
 qdrant_storage/
-redis_data/
 
 # ── Misc ──────────────────────────────────────────────────
 *.bak
