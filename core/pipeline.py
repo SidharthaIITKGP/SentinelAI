@@ -69,6 +69,14 @@ except ImportError:
     logger.warning("Groundedness engine unavailable; fail-safe fallback active")
 
 try:
+    from engines.trust.groundedness import (
+        retrieve_generation_evidence as retrieve_grounding_evidence,
+    )
+except ImportError:
+    retrieve_grounding_evidence = None
+    logger.warning("Pre-generation evidence retrieval unavailable")
+
+try:
     from core.risk_scorer import compute as compute_risk
 except ImportError:
     compute_risk = None
@@ -127,6 +135,50 @@ except ImportError:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Central LiteLLM call used for initial generation and a bounded repair attempt
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+MAX_GENERATION_EVIDENCE_SOURCES = 3
+MAX_GENERATION_EVIDENCE_CHARS_PER_SOURCE = 1800
+
+
+def _build_grounded_generation_prompt(
+    user_prompt: str,
+    evidence: list[dict],
+) -> str:
+    """Add bounded, source-labelled local evidence to the generation request."""
+    if not evidence:
+        return user_prompt
+
+    source_blocks: list[str] = []
+    for index, source in enumerate(
+        evidence[:MAX_GENERATION_EVIDENCE_SOURCES], start=1
+    ):
+        content = str(source.get("content", "")).strip()
+        if not content:
+            continue
+        source_blocks.append(
+            "\n".join(
+                (
+                    f"[APPROVED SOURCE {index}]",
+                    f"ID: {str(source.get('doc_id', 'unknown'))}",
+                    f"Title: {str(source.get('title', 'Untitled policy'))}",
+                    content[:MAX_GENERATION_EVIDENCE_CHARS_PER_SOURCE],
+                )
+            )
+        )
+    if not source_blocks:
+        return user_prompt
+
+    return (
+        "Answer the user question using only the approved local evidence below. "
+        "Return only the minimum complete policy sentences copied from the evidence "
+        "that answer the question. Do not add an introduction, conclusion, company "
+        "name, policy title, contact details, unsupported recommendations, assumptions, "
+        "or outside knowledge. If the evidence does not answer the question, say that "
+        "the policy cannot be verified from the available evidence.\n\n"
+        f"USER QUESTION:\n{user_prompt}\n\n"
+        "APPROVED LOCAL EVIDENCE:\n"
+        + "\n\n".join(source_blocks)
+    )
 
 
 async def _call_llm(prompt: str, model_config, use_case: str = "hr_copilot") -> tuple[str, int, int]:
@@ -783,9 +835,33 @@ async def run_pipeline(
         )
         return action_result, audit_entry
 
+    # Retrieve approved use-case evidence before the first generation. This is
+    # bounded and does not weaken the authoritative post-generation verifier.
+    generation_prompt = request.prompt
+    retrieved_evidence: list[dict] = []
+    retrieval_started = time.time()
+    if retrieve_grounding_evidence is not None:
+        try:
+            retrieved_evidence = await retrieve_grounding_evidence(
+                request.prompt,
+                request.use_case,
+                top_k=MAX_GENERATION_EVIDENCE_SOURCES,
+            )
+            generation_prompt = _build_grounded_generation_prompt(
+                request.prompt,
+                retrieved_evidence,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[%s] Pre-generation evidence retrieval unavailable: %s",
+                request_id,
+                type(exc).__name__,
+            )
+    step_latencies["retrieve"] = int((time.time() - retrieval_started) * 1000)
+
     # LLM call
     llm_response, tokens_input, tokens_output = await _call_llm(
-        prompt=request.prompt,
+        prompt=generation_prompt,
         model_config=model_config,
         use_case=use_case_str,
     )
@@ -800,6 +876,7 @@ async def run_pipeline(
         f"[{request_id}] Step 3 complete | "
         f"model={model_used} | "
         f"tokens_in={tokens_input} | tokens_out={tokens_output} | "
+        f"evidence_sources={len(retrieved_evidence)} | "
         f"latency={step_latencies['generate']}ms"
     )
 

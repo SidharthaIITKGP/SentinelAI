@@ -274,6 +274,7 @@ Turn the prototype into a measurable competition submission.
 
 - `api/schemas.py`
 - `api/routes/intercept.py`
+- `core/pipeline.py`
 - `core/injection_detector.py`
 - `engines/trust/groundedness.py`
 - `tests/test_phase1_governance.py` (the verified test fixture now explicitly
@@ -311,6 +312,11 @@ Turn the prototype into a measurable competition submission.
 - `DEMO.md` provides eight exact short flows: ALLOW, pre-LLM BLOCK, REDACT,
   CONTRADICTED→REPAIR→SUPPORTED, ESCALATE/review, economy routing, premium
   finance routing, and hard-routing failure with no LLM call.
+- The live pipeline now retrieves use-case-isolated approved evidence before its
+  first generation call and supplies a bounded evidence block that instructs the
+  model to answer only from those sources. Post-generation groundedness remains
+  authoritative and fail-safe when evidence is missing or the answer adds an
+  unsupported material claim.
 
 #### Final measured benchmark
 
@@ -338,10 +344,12 @@ positives, 24 true negatives, 0 false positives, and 0 false negatives.
 
 #### Tests added and exact results
 
-`tests/test_phase6_final.py` adds 16 cases covering top-k evidence competition,
+`tests/test_phase6_final.py` adds 20 cases covering top-k evidence competition,
 strong conflict, the safe schema default, receipt completeness/non-disclosure,
 metric mathematics and zero denominators, generalized injection variants,
-benign academic discussion, and full benchmark generation.
+benign academic discussion, full benchmark generation, evidence-constrained
+customer-policy ALLOW behavior, missing-evidence escalation, direct verbatim
+policy support, and protection against generic low-similarity fragments.
 
 - Compile: exit `0`, no output.
 - Phase 1: `21 passed, 18 warnings`.
@@ -349,8 +357,8 @@ benign academic discussion, and full benchmark generation.
 - Phase 3: `37 passed, 3 warnings`.
 - Phase 4: `34 passed, 10 warnings`.
 - Phase 5: `46 passed, 7 warnings`.
-- Phase 6: `16 passed`.
-- Full suite: `337 passed, 44 warnings`.
+- Phase 6: `20 passed`.
+- Full suite: `341 passed, 44 warnings`.
 - Benchmark command: exit `0`, 96 cases, metrics shown above.
 - Dashboard was not modified in Phase 6, so no dashboard build was required.
 
@@ -374,10 +382,74 @@ warnings from Phases 1–5; there are no failures or skips.
 - `governance_receipt` remains schema-optional for wire compatibility and
   infrastructure-only legacy stubs, but every real typed `/intercept`
   `AuditEntry` receives one.
+- Pre-generation retrieval improves answer discipline but does not guarantee an
+  ALLOW: an unavailable/irrelevant knowledge base or a generated unsupported
+  material claim still produces the existing safe escalation behavior.
+
+#### Phase 6 post-completion correction — evidence-first policy answers
+
+- **Issue found:** valid low-risk policy questions such as return or shipping
+  policy could be generated without retrieved context. The post-generation
+  verifier then correctly returned `INSUFFICIENT_EVIDENCE`, whose governance
+  guard escalated the answer. This appeared in the dashboard as LOW risk,
+  `12.5%`, and `ESCALATE` for nearly every policy question.
+- **Files modified:** `core/pipeline.py`,
+  `engines/trust/groundedness.py`, `tests/test_phase6_final.py`, `phase.md`, and
+  `PHASE_HISTORY.md`.
+- **Fix:** added reusable pre-generation evidence retrieval through the same
+  Qdrant collection and use-case filter as groundedness verification. Up to
+  three relevant sources are bounded and injected into the initial generation
+  prompt; the original user prompt remains the input to risk analysis and model
+  routing. Retrieval failure does not bypass the post-generation verifier.
+- **Behavior preserved:** supported low-risk customer-policy answers can now
+  reach `ALLOW`; regulated or unsupported claims remain fail-safe and
+  `ESCALATE`; injection, PII, repair, hard routing, receipts, and human review
+  behavior are unchanged.
+- **Tests added:** one realistic customer return-policy request asserts that
+  retrieved evidence constrains the first answer and produces `SUPPORTED` plus
+  `ALLOW`; one unsupported regulated-policy request asserts that missing
+  evidence still produces `INSUFFICIENT_EVIDENCE` plus `ESCALATE`.
+- **Exact verification:** compile exit `0`; Phase 1 `21 passed, 18 warnings`;
+  Phase 2 `13 passed, 6 warnings`; Phase 3 `37 passed, 3 warnings`; Phase 4 `34
+  passed, 10 warnings`; Phase 5 `46 passed, 7 warnings`; Phase 6 `18 passed`;
+  full suite `339 passed, 44 warnings`.
+- **Design decision:** retrieval guides generation, but only the existing
+  post-generation trust verdict authorizes release. No policy threshold was
+  weakened merely to make the dashboard show more ALLOW decisions.
+- **Remaining limitation:** answer quality still depends on matching knowledge
+  being indexed and the configured generation provider following the evidence
+  constraint; failure remains visible as an escalation rather than a fabricated
+  answer.
+
+#### Phase 6 live follow-up — policy-title retrieval and deterministic support
+
+- **Issue found:** the initial correction still embedded only long document
+  bodies, so short title-style queries such as `Shipping Policy` could retrieve
+  weakly. In addition, a valid answer copied from a long policy could fall below
+  the semantic threshold because the claim vector was compared with the entire
+  document vector.
+- **Files modified:** `core/pipeline.py`,
+  `engines/trust/groundedness.py`, `tests/test_phase6_final.py`, `phase.md`, and
+  `PHASE_HISTORY.md`.
+- **Fix:** knowledge-base vectors now include each policy title and body. The
+  generation constraint requests only the minimum complete policy sentences,
+  without introductions, company names, contact details, or conclusions.
+  Descriptive verbatim policy sentences are accepted as direct local evidence;
+  short generic fragments cannot use that path and still require the configured
+  semantic threshold.
+- **Operational requirement:** restart the API after this correction. Startup
+  re-upserts all knowledge-base vectors into Qdrant, which is required for the
+  new title-aware embeddings to take effect.
+- **Exact verification:** compile exit `0`; Phase 1/3/4/5 combined `138 passed,
+  38 warnings`; Phase 2 `13 passed, 6 warnings`; Phase 6 `20 passed`; full suite
+  `341 passed, 44 warnings`.
+- **Remaining limitation:** paraphrased multi-claim answers are still subject to
+  conservative semantic verification. If any material claim lacks support, the
+  response remains held rather than being force-allowed.
 
 Anything after this roadmap must preserve fail-closed routing and policy,
 explicit trust verdicts, top-k conflict uncertainty, receipt non-disclosure,
-tenant/privacy/review boundaries, estimated-value labels, and all 337 tests.
+tenant/privacy/review boundaries, estimated-value labels, and all 341 tests.
 No new phase is started.
 
 ---

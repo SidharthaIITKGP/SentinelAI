@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from api.schemas import GroundednessResult, GroundednessVerdict, UseCase
+from api.schemas import (
+    ActionType,
+    BiasResult,
+    GroundednessResult,
+    GroundednessVerdict,
+    InjectionResult,
+    InterceptRequest,
+    PIIResult,
+    UseCase,
+)
 from benchmarks.run_benchmark import calculate_metrics, run_benchmark
+import core.pipeline as pipeline
 from core.governance_receipt import build_governance_receipt
 from core.injection_detector import _scan_regex
 from engines.trust.groundedness import evaluate_claim
@@ -174,3 +185,139 @@ def test_offline_benchmark_runner_writes_real_metrics(tmp_path: Path) -> None:
     assert report["per_category"]["clean"]["false_positive_rate"] == 0.0
     assert report["metrics"]["llm_calls_avoided"] == 24
     assert "ESTIMATED" in report["routing_costs"]["label"]
+
+
+def _patch_local_pipeline_detectors(monkeypatch) -> None:
+    async def clean_injection(prompt: str):
+        return InjectionResult(detected=False)
+
+    async def clean_pii(text: str, scan_target: str = "prompt"):
+        return PIIResult(found=False, scan_target=scan_target)
+
+    async def clean_bias(text: str):
+        return BiasResult(detected=False)
+
+    monkeypatch.setattr(pipeline, "injection_scan", clean_injection)
+    monkeypatch.setattr(pipeline, "detect_pii", clean_pii)
+    monkeypatch.setattr(pipeline, "detect_bias", clean_bias)
+    monkeypatch.setattr(pipeline, "scan_toxic_content", None)
+
+
+def test_retrieved_policy_evidence_constrains_first_answer_and_allows(monkeypatch) -> None:
+    _patch_local_pipeline_detectors(monkeypatch)
+    source = _evidence(
+        0.96,
+        "cc_001",
+        "Acme Corp accepts returns on most items within 30 days of delivery.",
+    )
+    source["title"] = "Return and Refund Policy"
+    generated_prompts: list[str] = []
+
+    async def retrieve(query, use_case, *, top_k):
+        assert query == "What is the return policy?"
+        assert use_case == UseCase.CUSTOMER_CHATBOT
+        assert top_k == 3
+        return [source]
+
+    async def generate(prompt: str, model_config, use_case: str):
+        generated_prompts.append(prompt)
+        return "Acme Corp accepts returns within 30 days of delivery.", 45, 12
+
+    async def verify(response: str, use_case: UseCase):
+        evaluation = evaluate_claim(response, [source], 0.50)
+        return GroundednessResult(
+            verdict=evaluation.verdict,
+            score=1.0,
+            claim_evaluations=[evaluation],
+            total_claims_checked=1,
+            grounded_claims_count=1,
+            use_case_kb_used=use_case,
+        )
+
+    monkeypatch.setattr(pipeline, "retrieve_grounding_evidence", retrieve)
+    monkeypatch.setattr(pipeline, "_call_llm", generate)
+    monkeypatch.setattr(pipeline, "groundedness_check", verify)
+
+    action, audit = asyncio.run(pipeline.run_pipeline(InterceptRequest(
+        prompt="What is the return policy?",
+        use_case=UseCase.CUSTOMER_CHATBOT,
+        tenant_id="acme_corp",
+        user_id="phase6-rag",
+    )))
+
+    assert action.action == ActionType.ALLOW
+    assert action.final_response == "Acme Corp accepts returns within 30 days of delivery."
+    assert audit.groundedness.verdict == GroundednessVerdict.SUPPORTED
+    assert audit.step_latencies["retrieve"] >= 0
+    assert len(generated_prompts) == 1
+    assert "USER QUESTION:\nWhat is the return policy?" in generated_prompts[0]
+    assert "Return and Refund Policy" in generated_prompts[0]
+    assert source["content"] in generated_prompts[0]
+
+
+def test_missing_evidence_still_escalates_regulated_claim(monkeypatch) -> None:
+    _patch_local_pipeline_detectors(monkeypatch)
+
+    async def retrieve(query, use_case, *, top_k):
+        return []
+
+    async def generate(prompt: str, model_config, use_case: str):
+        assert prompt == "What is the festival leave allowance?"
+        return "Employees receive unlimited festival leave.", 10, 7
+
+    async def verify(response: str, use_case: UseCase):
+        evaluation = evaluate_claim(response, [], 0.50)
+        return GroundednessResult(
+            verdict=evaluation.verdict,
+            score=0.5,
+            claim_evaluations=[evaluation],
+            total_claims_checked=1,
+            grounded_claims_count=0,
+            use_case_kb_used=use_case,
+        )
+
+    monkeypatch.setattr(pipeline, "retrieve_grounding_evidence", retrieve)
+    monkeypatch.setattr(pipeline, "_call_llm", generate)
+    monkeypatch.setattr(pipeline, "groundedness_check", verify)
+
+    action, audit = asyncio.run(pipeline.run_pipeline(InterceptRequest(
+        prompt="What is the festival leave allowance?",
+        use_case=UseCase.HR_COPILOT,
+        tenant_id="acme_corp",
+        user_id="phase6-rag",
+    )))
+
+    assert action.action == ActionType.ESCALATE
+    assert action.escalation_required is True
+    assert audit.groundedness.verdict == GroundednessVerdict.INSUFFICIENT_EVIDENCE
+    assert audit.action.original_response not in audit.action.final_response
+
+
+def test_verbatim_policy_sentence_is_direct_support_below_embedding_threshold() -> None:
+    sentence = (
+        "Standard shipping is free on all orders over $50 and delivers within "
+        "5-7 business days."
+    )
+    evidence = _evidence(
+        0.31,
+        "cc_002",
+        sentence + " Express shipping is available for $12.99.",
+    )
+
+    result = evaluate_claim(sentence, [evidence], 0.50)
+
+    assert result.verdict == GroundednessVerdict.SUPPORTED
+    assert result.similarity_score == 0.50
+    assert "verbatim" in result.reason
+
+
+def test_short_generic_fragment_does_not_bypass_similarity_threshold() -> None:
+    evidence = _evidence(
+        0.31,
+        "cc_002",
+        "Standard shipping is available for domestic orders.",
+    )
+
+    result = evaluate_claim("shipping", [evidence], 0.50)
+
+    assert result.verdict == GroundednessVerdict.INSUFFICIENT_EVIDENCE

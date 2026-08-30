@@ -84,6 +84,7 @@ GROUNDEDNESS_THRESHOLDS: dict[str, float] = {
 }
 
 DEFAULT_THRESHOLD = 0.55
+PREGENERATION_EVIDENCE_MIN_SCORE = 0.30
 
 # Evidence within this similarity distance is treated as comparably relevant.
 # Conflicting, comparably relevant evidence is uncertainty, never a confident
@@ -177,8 +178,13 @@ async def initialize_knowledge_base(
 
     logger.info(f"Embedding {len(flat_docs)} knowledge base documents...")
 
-    # Embed all document contents
-    contents = [doc["content"] for doc in flat_docs]
+    # Index the policy title with its content. Users commonly ask for a policy
+    # by name (for example, "Shipping Policy"), and content-only vectors make
+    # those otherwise valid queries unnecessarily weak.
+    contents = [
+        f'{doc["title"]}. {doc["content"]}'
+        for doc in flat_docs
+    ]
     embeddings = _embedding_model.encode(
         contents,
         show_progress_bar=True,
@@ -404,6 +410,27 @@ async def _embed_and_search(
     return await loop.run_in_executor(None, _search)
 
 
+async def retrieve_generation_evidence(
+    query: str,
+    use_case: UseCase | str,
+    *,
+    top_k: int = 3,
+) -> list[dict]:
+    """Retrieve relevant approved local evidence for the first generation call.
+
+    This uses the same Qdrant collection and use-case isolation as the
+    post-generation verifier. A modest retrieval floor keeps unrelated chunks
+    out of the prompt; post-generation groundedness remains authoritative.
+    """
+    use_case_value = str(getattr(use_case, "value", use_case))
+    results = await _embed_and_search(query, use_case_value, top_k=top_k)
+    return [
+        result
+        for result in results
+        if float(result.get("score", 0.0)) >= PREGENERATION_EVIDENCE_MIN_SCORE
+    ]
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Private Helper 4 — Check Single Claim
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -448,6 +475,21 @@ def _evaluate_candidate(
         "source_title": str(candidate.get("title", "")) or None,
         "source_excerpt": str(candidate.get("content", ""))[:500] or None,
     }
+    # A sufficiently descriptive verbatim policy sentence is direct evidence,
+    # regardless of embedding dilution caused by comparing it with a long
+    # document vector. Keep short/generic fragments on the semantic path.
+    normalized_claim = re.sub(r"\s+", " ", claim).strip().casefold()
+    normalized_source = re.sub(
+        r"\s+", " ", str(candidate.get("content", ""))
+    ).strip().casefold()
+    if len(normalized_claim) >= 20 and normalized_claim in normalized_source:
+        return ClaimEvaluation(
+            claim_text=claim,
+            verdict=GroundednessVerdict.SUPPORTED,
+            similarity_score=max(similarity, threshold),
+            reason="The claim is a verbatim statement from approved local evidence.",
+            **source,
+        )
     if similarity < threshold:
         return ClaimEvaluation(
             claim_text=claim,

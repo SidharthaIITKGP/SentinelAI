@@ -500,3 +500,68 @@ boundaries, explicit estimate labels, and all 337 regressions.
 **Current phase:** Phase 6 — COMPLETE
 **Completed phases:** Phase 1–6
 **Next phase:** None — requested remediation roadmap complete.
+
+## 2026-08-30 — Phase 6 post-completion correction: evidence-first policy answers
+
+This surgical correction fixed a live integration gap without starting a new
+phase. Valid low-risk customer-policy questions were previously generated
+without knowledge-base context. The downstream groundedness verifier therefore
+returned `INSUFFICIENT_EVIDENCE`; its fail-safe policy guard escalated the
+response even when the ordinary risk score was only `12.5%`.
+
+Modified `core/pipeline.py`, `engines/trust/groundedness.py`,
+`tests/test_phase6_final.py`, `phase.md`, and `PHASE_HISTORY.md`. The pipeline
+now retrieves up to three relevant, use-case-isolated sources before the first
+LLM call and supplies their bounded content in a strict evidence-only generation
+prompt. The original prompt still drives routing and risk analysis. The
+post-generation groundedness verdict remains authoritative, so missing,
+irrelevant, conflicting, or unsupported evidence still escalates safely.
+
+Two tests were added. A realistic return-policy flow verifies that retrieved
+approved evidence constrains initial generation and permits a `SUPPORTED` /
+`ALLOW` result. A regulated unsupported-policy flow verifies that absent
+evidence remains `INSUFFICIENT_EVIDENCE` / `ESCALATE`. No policy threshold was
+weakened and no Phase 1–5 behavior was redesigned.
+
+Exact verification: compile exit `0`; Phase 1 `21 passed, 18 warnings`; Phase 2
+`13 passed, 6 warnings`; Phase 3 `37 passed, 3 warnings`; Phase 4 `34 passed, 10
+warnings`; Phase 5 `46 passed, 7 warnings`; Phase 6 `18 passed`; full suite `339
+passed, 44 warnings`.
+
+The remaining honest limitation is that ALLOW still depends on relevant
+knowledge being indexed and on generation staying within that evidence. An
+unavailable knowledge store or unsupported material claim intentionally remains
+an escalation.
+
+**Current phase:** Phase 6 — COMPLETE
+**Completed phases:** Phase 1–6
+**Next phase:** None — requested remediation roadmap complete.
+
+## 2026-08-30 — Phase 6 live follow-up: policy-title retrieval
+
+The evidence-first correction was followed by live dashboard testing. Short
+title-style requests such as `Shipping Policy` could still retrieve weakly
+because Qdrant vectors contained only long document bodies. A valid sentence
+copied from a long policy could also be diluted below the semantic threshold.
+
+Modified `core/pipeline.py`, `engines/trust/groundedness.py`,
+`tests/test_phase6_final.py`, `phase.md`, and `PHASE_HISTORY.md`. Knowledge-base
+vectors now embed policy title plus content. The evidence-constrained generation
+prompt requests only minimum complete policy sentences and excludes boilerplate,
+company names, contact details, and unsupported additions. A descriptive
+verbatim sentence is treated as direct support even when its long-document
+embedding score is low; short generic fragments still require normal semantic
+support and cannot bypass the threshold.
+
+Two focused tests cover the direct-evidence rule and its short-fragment guard.
+Exact verification: compile exit `0`; Phase 1/3/4/5 combined `138 passed, 38
+warnings`; Phase 2 `13 passed, 6 warnings`; Phase 6 `20 passed`; full suite `341
+passed, 44 warnings`.
+
+The API must restart after this change so startup re-upserts title-aware vectors
+into Qdrant. Conservative multi-claim verification remains intact: unsupported
+material claims still escalate.
+
+**Current phase:** Phase 6 — COMPLETE
+**Completed phases:** Phase 1–6
+**Next phase:** None — requested remediation roadmap complete.
