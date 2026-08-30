@@ -344,19 +344,25 @@ async def _embed_and_search(
         embedding = _embedding_model.encode(claim, show_progress_bar=False)
 
         # Query Qdrant with use_case filter
-        results = _qdrant_client.query_points(
-            collection_name=QDRANT_COLLECTION,
-            query=embedding.tolist(),
-            query_filter=Filter(
-                must=[
-                    FieldCondition(
-                        key="use_case",
-                        match=MatchValue(value=use_case),
-                    )
-                ]
-            ),
-            limit=top_k,
-        ).points
+        try:
+            results = _qdrant_client.query_points(
+                collection_name=QDRANT_COLLECTION,
+                query=embedding.tolist(),
+                query_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="use_case",
+                            match=MatchValue(value=use_case),
+                        )
+                    ]
+                ),
+                limit=top_k,
+            ).points
+        except Exception as _qdrant_err:
+            logger.warning(
+                f"Qdrant unavailable for groundedness search (non-fatal): {_qdrant_err}"
+            )
+            return []
 
         return [
             {

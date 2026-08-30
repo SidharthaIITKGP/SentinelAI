@@ -1,1 +1,1 @@
-"""FastAPI route modules."""
+# api/routes package

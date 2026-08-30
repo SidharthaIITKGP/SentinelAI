@@ -417,11 +417,17 @@ async def _scan_embeddings(prompt: str) -> tuple[float, Optional[str]]:
 
         # Query Qdrant for most similar injection pattern
         # Note: .search() deprecated in qdrant-client >= 1.7.0 — use query_points()
-        results = _qdrant_client.query_points(
-            collection_name=QDRANT_COLLECTION,
-            query=embedding.tolist(),
-            limit=3,    # top 3 matches
-        ).points
+        try:
+            results = _qdrant_client.query_points(
+                collection_name=QDRANT_COLLECTION,
+                query=embedding.tolist(),
+                limit=3,    # top 3 matches
+            ).points
+        except Exception as _qdrant_err:
+            logger.warning(
+                f"Qdrant unavailable for embedding search (non-fatal): {_qdrant_err}"
+            )
+            return 0.0, None
 
         if not results:
             return 0.0, None
