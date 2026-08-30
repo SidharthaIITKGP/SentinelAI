@@ -17,9 +17,9 @@ Phase 2 — Runtime (check):
   Splits response into individual claims/sentences
   Embeds each claim
   Searches Qdrant (filtered by use_case) for similar source docs
-  Checks similarity threshold — grounded or not
-  Checks number mismatch — catches "20 sick days" when doc says "10"
-  Returns GroundednessResult with score, flagged claims, sources
+  Classifies each claim as supported, contradicted, or insufficient evidence
+  Uses deterministic number, negation, and categorical contradiction checks
+  Returns GroundednessResult with verdict, score, claim evidence, and sources
 
 Key demo dependency:
   Demo Scenario 2 (HR hallucination) depends on this file.
@@ -51,9 +51,11 @@ from qdrant_client.models import (
 from sentence_transformers import SentenceTransformer
 
 from api.schemas import (
+    ClaimEvaluation,
     DetectorStatus,
     FlaggedClaim,
     GroundednessResult,
+    GroundednessVerdict,
     SupportingSource,
     UseCase,
 )
@@ -285,7 +287,7 @@ def _split_into_claims(text: str) -> list[str]:
         if not is_non_factual:
             filtered_claims.append(claim)
 
-    # If all claims filtered out → nothing to check → return grounded
+    # If all claims filtered out, there is no evidence basis for support.
     claims = filtered_claims if filtered_claims else []
 
     logger.debug(f"Split response into {len(claims)} claims")
@@ -402,15 +404,154 @@ async def _embed_and_search(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
+def _polarity_markers(text: str) -> dict[str, int]:
+    """Return explicit policy-category polarities without an external judge."""
+    normalized = re.sub(r"\s+", " ", text.lower())
+    categories: dict[str, int] = {}
+    patterns = {
+        "permission": (
+            r"\b(?:not allowed|not permitted|may not|prohibited)\b",
+            r"\b(?:allowed|permitted|approved|may(?!\s+not\b))\b",
+        ),
+        "inclusion": (
+            r"\b(?:does not include|do not include|excludes?)\b",
+            r"\b(?:includes?|included)\b",
+        ),
+        "eligibility": (r"\b(?:not eligible|ineligible)\b", r"\beligible\b"),
+        "requirement": (r"\bnot required\b", r"\brequired\b"),
+        "availability": (r"\b(?:disabled|not enabled)\b", r"\benabled\b"),
+        "approval": (r"\b(?:not approved|prohibited)\b", r"\bapproved\b"),
+        "direction": (r"\b(?:decrease|decreased|decline|declined)\b", r"\b(?:increase|increased|growth|grew)\b"),
+    }
+    for category, (negative, positive) in patterns.items():
+        if re.search(negative, normalized):
+            categories[category] = -1
+        elif re.search(positive, normalized):
+            categories[category] = 1
+    return categories
+
+
+def evaluate_claim(
+    claim: str,
+    search_results: list[dict],
+    threshold: float,
+) -> ClaimEvaluation:
+    """Classify one claim from retrieved local evidence deterministically."""
+    if not search_results:
+        return ClaimEvaluation(
+            claim_text=claim,
+            verdict=GroundednessVerdict.INSUFFICIENT_EVIDENCE,
+            similarity_score=0.0,
+            reason="No relevant local evidence was retrieved.",
+        )
+
+    best = search_results[0]
+    similarity = max(0.0, min(1.0, float(best.get("score", 0.0))))
+    source = {
+        "source_doc_id": str(best.get("doc_id", "")) or None,
+        "source_title": str(best.get("title", "")) or None,
+        "source_excerpt": str(best.get("content", ""))[:500] or None,
+    }
+    if similarity < threshold:
+        return ClaimEvaluation(
+            claim_text=claim,
+            verdict=GroundednessVerdict.INSUFFICIENT_EVIDENCE,
+            similarity_score=similarity,
+            reason=(
+                f"Best local evidence similarity {similarity:.3f} is below "
+                f"the {threshold:.3f} threshold."
+            ),
+            **source,
+        )
+
+    source_text = str(best.get("content", ""))
+    claim_numbers = _extract_numbers(claim)
+    source_numbers = _extract_numbers(source_text)
+    unmatched_numbers = [
+        number
+        for number in claim_numbers
+        if not any(abs(number - source_number) < 0.01 for source_number in source_numbers)
+    ]
+    if claim_numbers and source_numbers and unmatched_numbers:
+        return ClaimEvaluation(
+            claim_text=claim,
+            verdict=GroundednessVerdict.CONTRADICTED,
+            similarity_score=similarity,
+            reason="Material numeric values conflict with the retrieved local evidence.",
+            contradiction_type="NUMERIC_MISMATCH",
+            **source,
+        )
+    if claim_numbers and not source_numbers:
+        return ClaimEvaluation(
+            claim_text=claim,
+            verdict=GroundednessVerdict.INSUFFICIENT_EVIDENCE,
+            similarity_score=similarity,
+            reason="The claim contains key numbers absent from the retrieved evidence.",
+            **source,
+        )
+
+    claim_polarities = _polarity_markers(claim)
+    source_polarities = _polarity_markers(source_text)
+    conflicts = [
+        category
+        for category, polarity in claim_polarities.items()
+        if category in source_polarities and source_polarities[category] != polarity
+    ]
+    if conflicts:
+        contradiction_type = (
+            "NEGATION" if conflicts[0] in {"permission", "inclusion", "eligibility", "requirement"}
+            else "CATEGORICAL"
+        )
+        return ClaimEvaluation(
+            claim_text=claim,
+            verdict=GroundednessVerdict.CONTRADICTED,
+            similarity_score=similarity,
+            reason=f"Explicit {conflicts[0]} polarity conflicts with local evidence.",
+            contradiction_type=contradiction_type,
+            **source,
+        )
+
+    unlimited_terms = (
+        "unlimited", "no limit", "no cap", "no maximum", "without limit",
+    )
+    if any(term in claim.lower() for term in unlimited_terms) and source_numbers:
+        return ClaimEvaluation(
+            claim_text=claim,
+            verdict=GroundednessVerdict.CONTRADICTED,
+            similarity_score=similarity,
+            reason="An unlimited claim conflicts with an explicit numeric limit.",
+            contradiction_type="CATEGORICAL",
+            **source,
+        )
+
+    return ClaimEvaluation(
+        claim_text=claim,
+        verdict=GroundednessVerdict.SUPPORTED,
+        similarity_score=similarity,
+        reason="Relevant local evidence supports the claim with compatible values.",
+        **source,
+    )
+
+
+def aggregate_verdict(evaluations: list[ClaimEvaluation]) -> GroundednessVerdict:
+    """Aggregate claim verdicts conservatively and deterministically."""
+    verdicts = {evaluation.verdict for evaluation in evaluations}
+    if GroundednessVerdict.CONTRADICTED in verdicts:
+        return GroundednessVerdict.CONTRADICTED
+    if GroundednessVerdict.INSUFFICIENT_EVIDENCE in verdicts or not evaluations:
+        return GroundednessVerdict.INSUFFICIENT_EVIDENCE
+    return GroundednessVerdict.SUPPORTED
+
+
 async def _check_single_claim(
     claim: str,
     use_case: str,
     threshold: float,
-) -> tuple[bool, float, Optional[dict]]:
+) -> ClaimEvaluation:
     """
     Check if a single claim is grounded in the knowledge base.
 
-    Two-stage check:
+    Deterministic evidence check:
     1. Similarity threshold: is the topic covered in our knowledge base?
     2. Number mismatch: if topic matches, do the numbers agree?
 
@@ -420,89 +561,12 @@ async def _check_single_claim(
         threshold: Minimum similarity to consider grounded
 
     Returns:
-        Tuple of (is_grounded, best_similarity_score, best_matching_source)
-        is_grounded=True  → claim is backed by source
-        is_grounded=False → claim is ungrounded or numbers mismatch
+        A ClaimEvaluation with an explicit evidence verdict and source metadata.
     """
     # Search knowledge base
     results = await _embed_and_search(claim, use_case, top_k=3)
 
-    if not results:
-        logger.debug(f"No results found for claim: {claim[:60]}")
-        return False, 0.0, None
-
-    best = results[0]
-    best_score = best["score"]
-
-    # Stage 1 — Similarity threshold check
-    if best_score < threshold:
-        # Topic not covered in knowledge base at all
-        logger.debug(
-            f"Claim below threshold | score={best_score:.3f} | "
-            f"threshold={threshold:.3f} | claim={claim[:60]}"
-        )
-        return False, best_score, best
-
-    # Stage 2 — Number mismatch detection
-    # Topic is covered — now check if numbers agree
-    claim_numbers  = _extract_numbers(claim)
-    source_numbers = _extract_numbers(best["content"])
-
-    if claim_numbers and source_numbers:
-        # Both have numbers — check for mismatch
-        # A mismatch is when claim numbers don't appear in source numbers at all
-        claim_set  = set(claim_numbers)
-        source_set = set(source_numbers)
-
-        # Check if ANY claim number is in the source
-        # (allows for rounding differences within 0.01)
-        has_match = any(
-            any(abs(c - s) < 0.01 for s in source_set)
-            for c in claim_set
-        )
-
-        if not has_match:
-            logger.info(
-                f"NUMBER MISMATCH detected | "
-                f"claim_numbers={claim_numbers} | "
-                f"source_numbers={source_numbers} | "
-                f"claim={claim[:60]}"
-            )
-            # Topic matched but numbers wrong — hallucination
-            return False, best_score, best
-
-    # Stage 3 — Contradiction keyword detection
-    # Catches hallucinations like "unlimited" when source says "10 days"
-    # These words directly contradict specific bounded policies in our KB
-    CONTRADICTION_KEYWORDS = [
-        "unlimited", "no limit", "no cap", "no maximum",
-        "as many as you need", "as needed", "indefinite",
-        "no restriction", "unrestricted", "without limit",
-    ]
-    claim_lower = claim.lower()
-
-    # If claim contains contradiction keyword AND source contains specific numbers
-    # → claim is contradicting the policy → hallucination
-    claim_has_contradiction = any(
-        kw in claim_lower for kw in CONTRADICTION_KEYWORDS
-    )
-    source_has_specific_limit = bool(source_numbers)
-
-    if claim_has_contradiction and source_has_specific_limit:
-        logger.info(
-            f"CONTRADICTION detected | "
-            f"claim contains unlimited-type keyword but source has specific limit | "
-            f"source_numbers={source_numbers} | "
-            f"claim={claim[:60]}"
-        )
-        return False, best_score, best
-
-    # Both checks passed — claim is grounded
-    logger.debug(
-        f"Claim grounded | score={best_score:.3f} | "
-        f"source={best['title']} | claim={claim[:60]}"
-    )
-    return True, best_score, best
+    return evaluate_claim(claim, results, threshold)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -539,12 +603,13 @@ async def check(
         groundedness_result = await groundedness_check(llm_response, request.use_case)
 
     Demo Scenario 2:
-        LLM says "20 sick days" → source says "10" → score ~0.50 → REPAIR
+        LLM says "20 sick days" → source says "10" → CONTRADICTED → REPAIR
     """
     if _embedding_model is None or _qdrant_client is None:
         logger.warning("Groundedness engine unavailable; verification not performed")
         return GroundednessResult(
             status=DetectorStatus.UNAVAILABLE,
+            verdict=GroundednessVerdict.UNAVAILABLE,
             score=0.0,
             total_claims_checked=0,
             grounded_claims_count=0,
@@ -566,7 +631,8 @@ async def check(
     if total_claims == 0:
         logger.warning("No claims extracted from response")
         return GroundednessResult(
-            score=1.0,
+            verdict=GroundednessVerdict.INSUFFICIENT_EVIDENCE,
+            score=0.5,
             total_claims_checked=0,
             grounded_claims_count=0,
             use_case_kb_used=use_case,
@@ -586,6 +652,7 @@ async def check(
         )
         return GroundednessResult(
             status=DetectorStatus.UNAVAILABLE,
+            verdict=GroundednessVerdict.UNAVAILABLE,
             score=0.0,
             total_claims_checked=0,
             grounded_claims_count=0,
@@ -593,38 +660,45 @@ async def check(
         )
 
     # Process results
+    evaluations = list(results)
+    verdict = aggregate_verdict(evaluations)
     flagged_claims: list[FlaggedClaim] = []
     supporting_sources: list[SupportingSource] = []
-    grounded_count = 0
+    grounded_count = sum(
+        evaluation.verdict == GroundednessVerdict.SUPPORTED
+        for evaluation in evaluations
+    )
 
-    for claim, (is_grounded, similarity_score, best_source) in zip(claims, results):
-        if is_grounded:
-            grounded_count += 1
-            if best_source:
-                # Add to supporting sources (avoid duplicates by doc_id)
-                existing_ids = [s.doc_id for s in supporting_sources]
-                if best_source["doc_id"] not in existing_ids:
-                    supporting_sources.append(
-                        SupportingSource(
-                            doc_id=best_source["doc_id"],
-                            title=best_source["title"],
-                            chunk_text=best_source["content"][:200],
-                            similarity_score=round(similarity_score, 4),
-                            use_case=use_case,
-                        )
-                    )
-        else:
+    for evaluation in evaluations:
+        if evaluation.verdict != GroundednessVerdict.SUPPORTED:
             flagged_claims.append(
                 FlaggedClaim(
-                    claim_text=claim,
-                    similarity_score=round(similarity_score, 4),
+                    claim_text=evaluation.claim_text,
+                    similarity_score=round(evaluation.similarity_score, 4),
                     threshold_used=threshold,
                 )
             )
+        if evaluation.source_doc_id and evaluation.source_excerpt:
+            existing_ids = {source.doc_id for source in supporting_sources}
+            if evaluation.source_doc_id not in existing_ids:
+                supporting_sources.append(
+                    SupportingSource(
+                        doc_id=evaluation.source_doc_id,
+                        title=evaluation.source_title or "Untitled evidence",
+                        chunk_text=evaluation.source_excerpt[:200],
+                        similarity_score=round(evaluation.similarity_score, 4),
+                        use_case=use_case,
+                    )
+                )
 
-    # Calculate overall groundedness score
-    overall_score = grounded_count / total_claims if total_claims > 0 else 1.0
-    overall_score = round(overall_score, 4)
+    score_values = {
+        GroundednessVerdict.SUPPORTED: 1.0,
+        GroundednessVerdict.INSUFFICIENT_EVIDENCE: 0.5,
+        GroundednessVerdict.CONTRADICTED: 0.0,
+    }
+    # The public score maps the conservative aggregate verdict directly:
+    # SUPPORTED=1.0, INSUFFICIENT_EVIDENCE=0.5, CONTRADICTED=0.0.
+    overall_score = score_values[verdict]
 
     logger.info(
         f"Groundedness check complete | "
@@ -635,9 +709,11 @@ async def check(
     )
 
     return GroundednessResult(
+        verdict=verdict,
         score=overall_score,
         flagged_claims=flagged_claims,
         supporting_sources=supporting_sources,
+        claim_evaluations=evaluations,
         total_claims_checked=total_claims,
         grounded_claims_count=grounded_count,
         use_case_kb_used=use_case,

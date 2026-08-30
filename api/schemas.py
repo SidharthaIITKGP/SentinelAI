@@ -47,6 +47,14 @@ class DetectorStatus(str, Enum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
+class GroundednessVerdict(str, Enum):
+    """Evidence outcome, distinct from whether the detector was operational."""
+    SUPPORTED = "SUPPORTED"
+    CONTRADICTED = "CONTRADICTED"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
 class BiasType(str, Enum):
     """Categories of bias the bias detector can identify."""
     GENDER_BIAS = "gender_bias"
@@ -198,6 +206,20 @@ class SupportingSource(BaseModel):
         description="How closely it matched the claim"
     )
     use_case: UseCase = Field(..., description="Which use case's knowledge base this came from")
+
+
+class ClaimEvaluation(BaseModel):
+    """Deterministic evidence evaluation for one material response claim."""
+    model_config = ConfigDict(use_enum_values=True)
+
+    claim_text: str
+    verdict: GroundednessVerdict
+    similarity_score: float = Field(..., ge=0.0, le=1.0)
+    source_doc_id: Optional[str] = None
+    source_title: Optional[str] = None
+    source_excerpt: Optional[str] = None
+    reason: str
+    contradiction_type: Optional[str] = None
 
 
 class ModelConfig(BaseModel):
@@ -604,6 +626,10 @@ class GroundednessResult(BaseModel):
         default=DetectorStatus.AVAILABLE,
         description="AVAILABLE when verification ran; UNAVAILABLE when it could not run",
     )
+    verdict: GroundednessVerdict = Field(
+        default=GroundednessVerdict.SUPPORTED,
+        description="SUPPORTED, CONTRADICTED, INSUFFICIENT_EVIDENCE, or UNAVAILABLE",
+    )
 
     score: float = Field(
         ..., ge=0.0, le=1.0,
@@ -617,6 +643,10 @@ class GroundednessResult(BaseModel):
         default_factory=list,
         description="Knowledge base chunks that supported the response"
     )
+    claim_evaluations: List[ClaimEvaluation] = Field(
+        default_factory=list,
+        description="Per-claim deterministic verdicts and evidence references",
+    )
     total_claims_checked: int = Field(
         default=0, description="How many sentences were evaluated"
     )
@@ -626,6 +656,25 @@ class GroundednessResult(BaseModel):
     use_case_kb_used: UseCase = Field(
         ..., description="Which knowledge base was queried"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_legacy_unavailable_construction(cls, data):
+        """Infer the new verdict/status pair when legacy callers provide only one."""
+        if isinstance(data, dict):
+            normalized = dict(data)
+            if "verdict" not in normalized and normalized.get("status") in {
+                DetectorStatus.UNAVAILABLE,
+                DetectorStatus.UNAVAILABLE.value,
+            }:
+                normalized["verdict"] = GroundednessVerdict.UNAVAILABLE
+            if "status" not in normalized and normalized.get("verdict") in {
+                GroundednessVerdict.UNAVAILABLE,
+                GroundednessVerdict.UNAVAILABLE.value,
+            }:
+                normalized["status"] = DetectorStatus.UNAVAILABLE
+            return normalized
+        return data
 
     @field_validator("grounded_claims_count")
     @classmethod
@@ -641,13 +690,20 @@ class GroundednessResult(BaseModel):
     @model_validator(mode="after")
     def unavailable_is_not_verified(self):
         """Unavailable verification must never serialize as fully grounded."""
-        if self.status == DetectorStatus.UNAVAILABLE:
+        is_unavailable = self.status == DetectorStatus.UNAVAILABLE
+        verdict_unavailable = self.verdict == GroundednessVerdict.UNAVAILABLE
+        if is_unavailable != verdict_unavailable:
+            raise ValueError(
+                "groundedness status is UNAVAILABLE iff verdict is UNAVAILABLE"
+            )
+        if is_unavailable:
             if self.score != 0.0:
                 raise ValueError("UNAVAILABLE groundedness must use score 0.0")
             self.total_claims_checked = 0
             self.grounded_claims_count = 0
             self.flagged_claims = []
             self.supporting_sources = []
+            self.claim_evaluations = []
         return self
 
 
@@ -701,6 +757,9 @@ class ActionResult(BaseModel):
     repair_attempted: bool = Field(
         default=False, description="True if REPAIR was tried"
     )
+    repair_attempts: int = Field(
+        default=0, ge=0, le=1, description="Bounded repair call count"
+    )
     redacted_entity_count: int = Field(
         default=0, description="How many PII entities were masked (0 if not REDACT)"
     )
@@ -726,6 +785,8 @@ class ActionResult(BaseModel):
             raise ValueError(
                 "ESCALATE action must hold the original LLM response for review"
             )
+        if self.repair_attempts and not self.repair_attempted:
+            raise ValueError("repair_attempts requires repair_attempted=True")
         return self
 
 

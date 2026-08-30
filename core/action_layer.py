@@ -12,18 +12,21 @@ Five possible actions:
   ESCALATE → high-risk regulated context — flag for human review
 
 Called in Step 5 of pipeline.py after risk scoring and policy evaluation.
-Real implementation of REPAIR and REDACT wired in Day 3.
+REDACT uses verified anonymization. REPAIR permits one local-evidence-constrained
+generation and releases it only after a supported groundedness recheck.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from api.schemas import (
     ActionResult,
     ActionType,
     DetectorStatus,
+    GroundednessResult,
+    GroundednessVerdict,
     PIIResult,
     PolicyDecision,
     RiskScore,
@@ -32,6 +35,8 @@ from api.schemas import (
 from engines.responsibility.pii_detector import redact_pii
 
 logger = logging.getLogger("sentinelai")
+
+RepairCallback = Callable[[str], Awaitable[tuple[str, GroundednessResult]]]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -90,6 +95,42 @@ def _holding_message(use_case: UseCase) -> str:
     return ESCALATION_MESSAGES.get(_use_case_key(use_case), DEFAULT_ESCALATION_MESSAGE)
 
 
+def _repair_prompt(
+    original_prompt: str,
+    original_response: str,
+    groundedness: GroundednessResult,
+) -> tuple[str, list[str], list[str]]:
+    """Build a bounded correction prompt solely from contradictory local evidence."""
+    evidence_rows: list[str] = []
+    source_ids: list[str] = []
+    source_titles: list[str] = []
+    for evaluation in groundedness.claim_evaluations:
+        if (
+            evaluation.verdict != GroundednessVerdict.CONTRADICTED
+            or not evaluation.source_excerpt
+        ):
+            continue
+        source_id = evaluation.source_doc_id or "unknown"
+        title = evaluation.source_title or "Untitled evidence"
+        if source_id not in source_ids:
+            source_ids.append(source_id)
+            source_titles.append(title)
+            evidence_rows.append(
+                f"SOURCE {source_id} — {title}:\n{evaluation.source_excerpt}"
+            )
+
+    evidence_text = "\n\n".join(evidence_rows)
+    prompt = (
+        "Correct the answer using only the supplied local evidence. Do not add facts "
+        "from memory. If the evidence is insufficient, explicitly say so. Return only "
+        "the corrected answer, with no reasoning or preamble.\n\n"
+        f"ORIGINAL QUESTION:\n{original_prompt}\n\n"
+        f"ORIGINAL RESPONSE:\n{original_response}\n\n"
+        f"LOCAL EVIDENCE:\n{evidence_text}"
+    )
+    return prompt, source_ids, source_titles
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Main execute function
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -101,6 +142,9 @@ async def execute(
     llm_response: str,
     pii_in_response: PIIResult,
     use_case: UseCase,
+    original_prompt: str = "",
+    groundedness_result: Optional[GroundednessResult] = None,
+    repair_callback: Optional[RepairCallback] = None,
 ) -> ActionResult:
     """
     Executes the governed action determined by the policy engine.
@@ -111,6 +155,9 @@ async def execute(
         llm_response:    Raw LLM response before any action
         pii_in_response: PII detected in the LLM response (used for REDACT)
         use_case:        Which use case — affects fallback messages
+        original_prompt: User question included in an evidence-constrained repair
+        groundedness_result: Initial claim verdicts and local evidence references
+        repair_callback: Pipeline-owned bounded generation and verification callback
 
     Returns:
         ActionResult with the final response, action taken, evidence, and explanation.
@@ -155,37 +202,98 @@ async def execute(
 
     # ── REPAIR ─────────────────────────────────────────────────────────────
     elif action == ActionType.REPAIR:
-        # TODO Day 3: implement real repair
-        # Real implementation:
-        #   1. Get the flagged claims from groundedness result
-        #   2. Get the supporting source documents from groundedness result
-        #   3. Re-prompt LLM: "Answer ONLY based on: {sources}. Question: {prompt}"
-        #   4. Return repaired response
-        # For now: return original response with repair flag
-        logger.info(
-            "REPAIR action — re-prompting LLM with source context (STUBBED Day 3)"
+        before_verdict = (
+            groundedness_result.verdict if groundedness_result else None
         )
-        repaired_response = (
-            f"{llm_response}\n\n"
-            f"[Note: This response has been reviewed for accuracy. "
-            f"Please verify key claims with official documentation.]"
+        base_evidence = {
+            "risk_score": risk_score.overall,
+            "groundedness_risk": risk_score.breakdown.groundedness_risk,
+            "policy_file": policy_decision.policy_file,
+            "repair_attempted": False,
+            "repair_attempts": 0,
+            "before_verdict": before_verdict,
+            "after_verdict": None,
+            "source_doc_ids": [],
+            "source_titles": [],
+            "flagged_claim_count": (
+                len(groundedness_result.flagged_claims)
+                if groundedness_result
+                else 0
+            ),
+            "repair_success": False,
+        }
+        if (
+            groundedness_result is None
+            or groundedness_result.verdict != GroundednessVerdict.CONTRADICTED
+            or repair_callback is None
+            or pii_in_response.found
+        ):
+            return ActionResult(
+                action=ActionType.ESCALATE,
+                final_response=_holding_message(use_case),
+                original_response=llm_response,
+                explanation=(
+                    "A safe evidence-constrained repair was not available. "
+                    "The original response is held for human review."
+                ),
+                evidence=base_evidence,
+                escalation_required=True,
+            )
+
+        repair_prompt, source_ids, source_titles = _repair_prompt(
+            original_prompt, llm_response, groundedness_result
         )
+        base_evidence.update(
+            {
+                "source_doc_ids": source_ids,
+                "source_titles": source_titles,
+            }
+        )
+        if not source_ids:
+            return ActionResult(
+                action=ActionType.ESCALATE,
+                final_response=_holding_message(use_case),
+                original_response=llm_response,
+                explanation="Contradiction evidence was incomplete; response held for review.",
+                evidence=base_evidence,
+                escalation_required=True,
+            )
+
+        base_evidence["repair_attempted"] = True
+        base_evidence["repair_attempts"] = 1
+        try:
+            repaired_response, recheck = await repair_callback(repair_prompt)
+            base_evidence["after_verdict"] = recheck.verdict
+        except Exception as exc:
+            logger.warning("Bounded repair failed: %s", type(exc).__name__)
+            repaired_response = ""
+            recheck = None
+            base_evidence["after_verdict"] = GroundednessVerdict.UNAVAILABLE
+
+        if recheck is not None and recheck.verdict == GroundednessVerdict.SUPPORTED:
+            base_evidence["repair_success"] = True
+            return ActionResult(
+                action=ActionType.REPAIR,
+                final_response=repaired_response,
+                original_response=llm_response,
+                explanation="Contradicted claims were corrected from local evidence and re-verified.",
+                evidence=base_evidence,
+                repair_attempted=True,
+                repair_attempts=1,
+            )
+
         return ActionResult(
-            action=ActionType.REPAIR,
-            final_response=repaired_response,
+            action=ActionType.ESCALATE,
+            final_response=_holding_message(use_case),
             original_response=llm_response,
             explanation=(
-                f"Hallucination risk detected (groundedness risk: "
-                f"{risk_score.breakdown.groundedness_risk:.3f}). "
-                f"Response flagged for accuracy."
+                "The one permitted repair attempt did not verify as supported. "
+                "Both responses are held for human review."
             ),
-            evidence={
-                "risk_score": risk_score.overall,
-                "groundedness_risk": risk_score.breakdown.groundedness_risk,
-                "policy_file": policy_decision.policy_file,
-                "repair_method": "stub — real LLM re-prompt wired Day 3",
-            },
+            evidence=base_evidence,
+            escalation_required=True,
             repair_attempted=True,
+            repair_attempts=1,
         )
 
     # ── REDACT ─────────────────────────────────────────────────────────────

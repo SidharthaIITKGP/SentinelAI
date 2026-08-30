@@ -18,9 +18,9 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 
 ## Current Status
 
-**Current phase:** Phase 1 — COMPLETE  
-**Completed phases:** Phase 1 — Governance correctness and safety  
-**Next phase:** Phase 2 — Groundedness uncertainty and real repair
+**Current phase:** Phase 2 — COMPLETE
+**Completed phases:** Phase 1 — Governance correctness and safety; Phase 2 — Groundedness uncertainty and real repair
+**Next phase:** Phase 3 — Real Efficiency Engine and Model Routing
 
 ### Baseline verification observed on 2026-08-30
 
@@ -46,7 +46,7 @@ The priority is correctness, demonstrability, measurable evidence, and consisten
 
 ### P1 capability gaps
 
-- REPAIR is still a stub.
+- REPAIR was replaced in Phase 2 with one bounded, evidence-constrained attempt and a mandatory groundedness recheck.
 - Model routing currently points both default and premium routes to the same model.
 - Cost/latency/model-fit evaluation is not yet a real Efficiency Engine.
 - Human review and feedback schemas exist, but there is no complete review/feedback workflow.
@@ -339,3 +339,100 @@ The Starlette/FastAPI synchronous `TestClient` portal thread did not shut down i
 - Unavailable verification must remain distinct from unsupported or contradicted evidence and must never become a perfect groundedness score.
 
 **Next phase:** Phase 2 — Groundedness uncertainty and real repair. Do not begin without review/authorization.
+
+## 2026-08-30 — Phase 2 COMPLETE
+
+### Status
+
+**COMPLETE.** Phase 2 adds explicit groundedness uncertainty and one real,
+bounded repair attempt without beginning Phase 3 work.
+
+### Exact files created
+
+- `tests/test_phase2_groundedness_repair.py`
+- `PHASE_HISTORY.md`
+
+### Exact files modified
+
+- `api/schemas.py`
+- `core/action_layer.py`
+- `core/pipeline.py`
+- `engines/trust/groundedness.py`
+- `phase.md`
+
+### Features and fixes implemented
+
+- Added `GroundednessVerdict` (`SUPPORTED`, `CONTRADICTED`,
+  `INSUFFICIENT_EVIDENCE`, `UNAVAILABLE`) independently of detector status, plus
+  a backward-compatible status/verdict invariant.
+- Added per-claim `ClaimEvaluation` evidence with source identifiers, titles,
+  excerpts, similarity, reasons, and contradiction types.
+- Added deterministic numeric, negation, inclusion, eligibility, requirement,
+  enabled/disabled, approved/prohibited, and increase/decrease checks after
+  retrieval. Low-similarity evidence is always insufficient, never contradictory.
+- Aggregation is conservative: any contradiction wins, then insufficient
+  evidence, then supported. Empty/non-checkable output is insufficient with the
+  documented score mapping `SUPPORTED=1.0`, `INSUFFICIENT_EVIDENCE=0.5`, and
+  `CONTRADICTED/UNAVAILABLE=0.0`.
+- Replaced the REPAIR stub with one local-evidence-constrained LLM call at
+  temperature `<=0.2` and at most 400 tokens. The repaired text is checked once
+  and released only when its verdict is `SUPPORTED`; all other outcomes use a
+  non-leaking escalation holding response.
+- Added a narrow groundedness policy guard: repairable contradictions propose
+  REPAIR, contradictions without usable evidence escalate, and insufficient
+  evidence escalates for HR/finance or when no customer safe-uncertainty policy
+  is configured. Existing stronger configured actions remain authoritative.
+- Added repair audit evidence for attempt count, before/after verdicts, flagged
+  claim count, source IDs/titles, and success. No database schema change was
+  needed because action evidence is already a structured mapping.
+
+### Tests added and exact results
+
+- Added 13 focused tests covering numeric support/contradiction, negation and
+  direction contradictions, low-similarity insufficiency, aggregation priority,
+  retrieval unavailability, empty output, status/verdict invariants, successful
+  sick-day repair (`20` to KB-supported `10`), held failed repairs, unavailable
+  repair rechecks, regulated insufficiency, source evidence, and exactly one call.
+- Pre-change regression: `python -m compileall -q .` exited `0`; `pytest -q`
+  reported `191 passed, 18 warnings in 13.93s`.
+- Focused Phase 1 regression after implementation:
+  `21 passed, 18 warnings in 7.93s`.
+- Focused Phase 2 run: `13 passed, 6 warnings in 6.82s`.
+- Full pre-documentation run: `204 passed, 24 warnings in 12.60s`.
+- Final required verification results are recorded in `PHASE_HISTORY.md`.
+
+### Important design decisions
+
+- Detector availability answers whether verification ran; the groundedness
+  verdict answers what the evidence showed. Retrieval failure never means
+  unsupported or supported.
+- Contradiction checks run only on relevant evidence above the use-case
+  similarity threshold. No external LLM judge is used for classification.
+- The action layer builds the constrained prompt, while the pipeline owns the
+  existing LLM call and recheck callback, avoiding a circular import.
+- A configured BLOCK, ESCALATE, or REDACT is never weakened by the groundedness
+  guard. Phase 1 thresholds, fail-safe behavior, holding responses, and
+  route-owned audit persistence remain unchanged.
+
+### Known remaining limitations
+
+- Contradiction detection is intentionally deterministic and lexical; it does
+  not resolve complex temporal, causal, or multi-document semantic conflicts.
+- Runtime verification still depends on the local embedding model and Qdrant;
+  outages are safely represented as `UNAVAILABLE`.
+- Repair uses only the retrieved top evidence excerpts and permits no iterative
+  refinement; a non-supported first repair is held.
+- Model routing/cost optimization, human-review workflow, privacy-aware audit
+  retention, dependency health accuracy, and benchmarking remain future phases.
+
+### Phase 3 must preserve
+
+- The status/verdict separation and conservative score mapping.
+- The one-call/one-recheck repair bound and evidence-only repair prompt.
+- Release only after `SUPPORTED`; never expose held originals or failed repairs.
+- Phase 1 fail-safe policy, REDACT behavior, centralized risk boundaries, and
+  route-owned single audit write.
+- Existing public schema compatibility and all Phase 1/2 regression tests.
+
+**Next phase:** Phase 3 — Real Efficiency Engine and Model Routing. Do not begin
+without review/authorization.

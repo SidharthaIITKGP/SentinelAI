@@ -9,7 +9,7 @@ Orchestrates the 5-step governance pipeline:
   Step 4 — EVALUATE:       run 3 engines IN PARALLEL on the LLM response
   Step 5 — ACT+LOG:        take governed action, write to audit log
 
-External dependencies (stubbed until Day 3):
+Engine ownership in the existing prototype:
   Aman:   pii_detector, bias_detector, policy/engine
   Gaurav: model_router, audit_logger
   Self:   injection_detector, groundedness, risk_scorer, action_layer
@@ -31,6 +31,7 @@ from api.schemas import (
     BiasResult,
     DetectorStatus,
     GroundednessResult,
+    GroundednessVerdict,
     InjectionResult,
     InterceptRequest,
     ModelConfig,
@@ -107,7 +108,7 @@ except ImportError:
     logger.warning("model_router not found — stubbed (Gaurav's module)")
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# Mock LLM call (stubbed until Day 3 — real LiteLLM integration)
+# Central LiteLLM call used for initial generation and a bounded repair attempt
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 
@@ -189,6 +190,8 @@ async def _call_llm(prompt: str, model_config, use_case: str = "hr_copilot") -> 
         }
 
         system_prompt = SYSTEM_PROMPTS.get(use_case, SYSTEM_PROMPTS["hr_copilot"])
+        if isinstance(model_config, dict):
+            system_prompt = model_config.get("_system_prompt_override", system_prompt)
 
         response = await litellm.acompletion(
             model=model,
@@ -262,10 +265,55 @@ def _mock_groundedness_result(use_case: UseCase) -> GroundednessResult:
     """Return an explicit unavailable result, never a verified score."""
     return GroundednessResult(
         status=DetectorStatus.UNAVAILABLE,
+        verdict=GroundednessVerdict.UNAVAILABLE,
         score=0.0,
         total_claims_checked=0,
         grounded_claims_count=0,
         use_case_kb_used=use_case,
+    )
+
+
+def _apply_groundedness_policy_guard(
+    decision: PolicyDecision,
+    groundedness: GroundednessResult,
+    use_case: UseCase,
+) -> PolicyDecision:
+    """Apply only the minimum evidence guard; stronger configured actions win."""
+    action = decision.final_action
+    if action in {ActionType.BLOCK, ActionType.ESCALATE, ActionType.REDACT}:
+        return decision
+
+    repairable = any(
+        evaluation.verdict == GroundednessVerdict.CONTRADICTED
+        and bool(evaluation.source_excerpt)
+        for evaluation in groundedness.claim_evaluations
+    )
+    if groundedness.verdict == GroundednessVerdict.CONTRADICTED:
+        guarded_action = ActionType.REPAIR if repairable else ActionType.ESCALATE
+        reason = (
+            "Groundedness contradiction requires one evidence-constrained repair."
+            if repairable
+            else "Groundedness contradiction lacks repair evidence and requires review."
+        )
+    elif groundedness.verdict == GroundednessVerdict.INSUFFICIENT_EVIDENCE:
+        guarded_action = ActionType.ESCALATE
+        reason = (
+            "Local evidence is insufficient; the response is held for review"
+            + (
+                " in this regulated use case."
+                if use_case in {UseCase.HR_COPILOT, UseCase.FINANCE_TOOL}
+                else " because no safe-uncertainty policy is configured."
+            )
+        )
+    else:
+        return decision
+
+    return PolicyDecision(
+        approved=False,
+        final_action=guarded_action,
+        reason=reason,
+        policy_file="policy/groundedness_guard",
+        threshold_applied=decision.threshold_applied,
     )
 
 
@@ -711,7 +759,8 @@ async def run_pipeline(
     step_latencies["evaluate"] = int((time.time() - step_start) * 1000)
     logger.info(
         f"[{request_id}] Step 4 complete | "
-        f"groundedness={groundedness_result.score:.2f} | "
+        f"groundedness={groundedness_result.verdict} "
+        f"({groundedness_result.score:.2f}) | "
         f"pii_in_response={pii_response_result.found} | "
         f"bias={bias_result.detected} | "
         f"latency={step_latencies['evaluate']}ms"
@@ -794,6 +843,55 @@ async def run_pipeline(
             f"action={policy_decision.final_action} | reason={policy_decision.reason}"
         )
 
+    policy_decision = _apply_groundedness_policy_guard(
+        policy_decision,
+        groundedness_result,
+        request.use_case,
+    )
+
+    async def _repair_once(repair_prompt: str) -> tuple[str, GroundednessResult]:
+        """Make exactly one bounded generation and one verification pass."""
+        nonlocal tokens_input, tokens_output
+        if isinstance(model_config, dict):
+            repair_config = {
+                **model_config,
+                "temperature": min(float(model_config.get("temperature", 0.2)), 0.2),
+                "max_tokens": min(int(model_config.get("max_tokens", 400)), 400),
+                "_system_prompt_override": (
+                    "You correct answers using only evidence supplied in the user "
+                    "message. Never use outside facts. Return only the answer."
+                ),
+            }
+        else:
+            repair_config = {
+                **model_config.model_dump(),
+                "temperature": min(float(model_config.temperature), 0.2),
+                "max_tokens": min(int(model_config.max_tokens), 400),
+                "_system_prompt_override": (
+                    "You correct answers using only evidence supplied in the user "
+                    "message. Never use outside facts. Return only the answer."
+                ),
+            }
+        repaired, repair_tokens_in, repair_tokens_out = await _call_llm(
+            prompt=repair_prompt,
+            model_config=repair_config,
+            use_case=use_case_str,
+        )
+        tokens_input += repair_tokens_in
+        tokens_output += repair_tokens_out
+        if groundedness_check is None:
+            return repaired, _mock_groundedness_result(request.use_case)
+        try:
+            recheck = await groundedness_check(repaired, request.use_case)
+        except Exception as exc:
+            logger.error(
+                "[%s] repair re-verification unavailable: %s",
+                request_id,
+                type(exc).__name__,
+            )
+            recheck = _mock_groundedness_result(request.use_case)
+        return repaired, recheck
+
     # Action execution
     # REAL (Day 2): action_result = await execute_action(policy_decision, risk_score, ...)
     if execute_action is not None:
@@ -803,6 +901,9 @@ async def run_pipeline(
             llm_response=llm_response,
             pii_in_response=pii_response_result,
             use_case=request.use_case,
+            original_prompt=request.prompt,
+            groundedness_result=groundedness_result,
+            repair_callback=_repair_once,
         )
     else:
         logger.error(
