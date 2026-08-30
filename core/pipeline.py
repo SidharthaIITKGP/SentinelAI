@@ -1069,6 +1069,12 @@ async def run_pipeline(
         efficiency_result.retry_count = action_result.repair_attempts
         action_result.evidence["efficiency"] = efficiency_result.model_dump()
 
+    # audit_log only persists a combined tokens_used total (see data/schema.sql).
+    # Stash the input/output split in the evidence JSONB so the dashboard can
+    # show a real breakdown instead of assuming 0 input tokens.
+    action_result.evidence["tokens_input"] = tokens_input
+    action_result.evidence["tokens_output"] = tokens_output
+
     # Total pipeline latency
     total_latency_ms = max(1, int((time.time() - pipeline_start) * 1000))
     step_latencies["act"] = int((time.time() - step_start) * 1000)

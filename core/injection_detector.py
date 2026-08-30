@@ -240,6 +240,38 @@ TOXIC_SIMILARITY_THRESHOLD = 0.72  # lower than injection threshold — casts wi
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Explicit Sexual Content — deterministic regex fast-path
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# TOXIC_CONCEPT_SEEDS above are HR/hiring-context phrasings (sexual
+# objectification of candidates, workplace harassment). Generic explicit
+# sexual requests directed at a person (e.g. "how to fuck a random girl")
+# are semantically distant from those seeds, so cosine similarity against
+# them is unreliable. This mirrors the Layer-1 regex fast-path used for
+# prompt injection: exact phrasing is matched deterministically instead of
+# depending on embedding similarity.
+
+EXPLICIT_SEXUAL_CONTENT_PATTERNS: list[str] = [
+    r"how\s+(?:to|do\s+i|can\s+i|should\s+i)\s+f+u+c+k\b",
+    r"\bf+u+c+k\s+(?:a|an|the|my|your|his|her|that|this)\s+"
+    r"(?:girl|woman|women|man|men|boy|guy|lady|teen|teenager|kid|child|person)\b",
+]
+
+
+def _scan_explicit_sexual_content(prompt: str) -> tuple[bool, float, str]:
+    """
+    Deterministic regex pre-check for explicit sexual content directed at a
+    person. Returns (is_toxic, confidence_score, concept).
+
+    Fires with high confidence (0.95) on match — well above the 0.72 BLOCK
+    threshold applied in core/pipeline.py Step 1.
+    """
+    for pattern in EXPLICIT_SEXUAL_CONTENT_PATTERNS:
+        if re.search(pattern, prompt, re.IGNORECASE):
+            return True, 0.95, "explicit_sexual_content"
+    return False, 0.0, "none"
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Detection Thresholds
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -757,6 +789,17 @@ async def scan_toxic_content(prompt: str) -> tuple[bool, float, str]:
 
     Returns (is_toxic, confidence_score, matched_concept)
     """
+    # Deterministic fast-path — runs before the embedding search and does not
+    # require the embedding model or Qdrant to be available.
+    regex_detected, regex_score, regex_concept = _scan_explicit_sexual_content(prompt)
+    if regex_detected:
+        logger.info(
+            f"Explicit sexual content detected via regex | "
+            f"concept={regex_concept} | confidence={regex_score:.3f} | "
+            f"prompt_length={len(prompt)}"
+        )
+        return True, regex_score, regex_concept
+
     if _embedding_model is None or _qdrant_client is None:
         logger.warning("Semantic toxicity check unavailable — engines not initialized")
         return False, 0.0, "none"

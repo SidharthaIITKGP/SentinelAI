@@ -45,8 +45,9 @@ export default function RiskPanel({ selectedRow }) {
 
   const row = selectedRow;
   const breakdown = row.risk_breakdown ?? {};
-  const tokensIn = 0;
-  const tokensOut = row.tokens_used ?? 0;
+  const evidence = row.action_evidence ?? {};
+  const tokensIn = evidence.tokens_input ?? 0;
+  const tokensOut = evidence.tokens_output ?? row.tokens_used ?? 0;
   const llmCalled = row.model_used && row.model_used !== 'none';
 
   return (
@@ -162,7 +163,7 @@ export default function RiskPanel({ selectedRow }) {
             </div>
             <div style={{ marginTop: 8, fontSize: 11, color: '#6B7280', lineHeight: 1.6 }}>
               {llmCalled ? 'LLM called' : 'LLM never called'}
-              {' · '}{tokensOut} tokens spent
+              {' · '}{tokensIn + tokensOut} tokens spent
             </div>
           </div>
         </div>
