@@ -29,6 +29,7 @@ from api.schemas import (
     ActionType,
     AuditEntry,
     BiasResult,
+    DetectorStatus,
     GroundednessResult,
     InjectionResult,
     InterceptRequest,
@@ -92,9 +93,10 @@ except ImportError:
     logger.warning("bias_detector not found — stubbed (Aman's module)")
 
 try:
-    from policy.engine import evaluate_policy
+    from policy.engine import evaluate_policy, fallback_policy_decision
 except ImportError:
     evaluate_policy = None
+    fallback_policy_decision = None
     logger.warning("policy engine not found — stubbed (Aman's module)")
 
 # ── Gaurav's modules (stubbed until Day 3) ────────────────────────────────────
@@ -103,13 +105,6 @@ try:
 except ImportError:
     route_model = None
     logger.warning("model_router not found — stubbed (Gaurav's module)")
-
-try:
-    from data.audit_logger import log_request
-except ImportError:
-    log_request = None
-    logger.warning("audit_logger not found — stubbed (Gaurav's module)")
-
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Mock LLM call (stubbed until Day 3 — real LiteLLM integration)
@@ -233,40 +228,44 @@ async def _call_llm(prompt: str, model_config, use_case: str = "hr_copilot") -> 
 
 
 def _mock_injection_result() -> InjectionResult:
-    """Mock injection result — no injection detected."""
-    return InjectionResult(detected=False, confidence=0.0, method="none")
+    """Return an explicit unavailable result when the detector cannot load."""
+    return InjectionResult(
+        detected=False,
+        status=DetectorStatus.UNAVAILABLE,
+        confidence=0.0,
+        method="none",
+    )
 
 
 def _mock_pii_result(scan_target: str = "prompt") -> PIIResult:
-    """Mock PII result — no PII found."""
-    return PIIResult(found=False, risk_score=0.0, scan_target=scan_target)
+    """Return an explicit unavailable result when the detector cannot load."""
+    return PIIResult(
+        found=False,
+        status=DetectorStatus.UNAVAILABLE,
+        risk_score=0.0,
+        scan_target=scan_target,
+    )
 
 
 def _mock_bias_result() -> BiasResult:
-    """Mock bias result — no bias detected."""
+    """Return an explicit unavailable result when the detector cannot load."""
     return BiasResult(
-        detected=False, score=0.0, confidence=0.0, detection_method="pattern_match"
+        detected=False,
+        status=DetectorStatus.UNAVAILABLE,
+        score=0.0,
+        confidence=0.0,
+        detection_method="unavailable",
     )
 
 
 def _mock_groundedness_result(use_case: UseCase) -> GroundednessResult:
-    """Mock groundedness result — fully grounded."""
+    """Return an explicit unavailable result, never a verified score."""
     return GroundednessResult(
-        score=1.0,
-        total_claims_checked=1,
-        grounded_claims_count=1,
+        status=DetectorStatus.UNAVAILABLE,
+        score=0.0,
+        total_claims_checked=0,
+        grounded_claims_count=0,
         use_case_kb_used=use_case,
-    )
-
-
-def _mock_policy_decision() -> PolicyDecision:
-    """Mock policy decision — approved, ALLOW action."""
-    return PolicyDecision(
-        approved=True,
-        final_action=ActionType.ALLOW,
-        reason="Policy engine stubbed — defaulting to ALLOW",
-        policy_file="stub",
-        threshold_applied=0.75,
     )
 
 
@@ -329,7 +328,15 @@ async def run_pipeline(
     # Injection detection
     # REAL (Day 2): injection_result = await injection_scan(request.prompt)
     if injection_scan is not None:
-        injection_result = await injection_scan(request.prompt)
+        try:
+            injection_result = await injection_scan(request.prompt)
+        except Exception as exc:
+            logger.error(
+                "[%s] injection detector unavailable: %s",
+                request_id,
+                type(exc).__name__,
+            )
+            injection_result = _mock_injection_result()
     else:
         injection_result = _mock_injection_result()
         logger.debug(f"[{request_id}] injection_scan stubbed")
@@ -630,16 +637,23 @@ async def run_pipeline(
 
     # Run engines — use real if available, mock if not
     async def _run_groundedness():
-        """Run groundedness check or return mock."""
+        """Run groundedness check or return an explicit unavailable result."""
         if groundedness_check is not None:
-            return await groundedness_check(llm_response, request.use_case)
+            try:
+                return await groundedness_check(llm_response, request.use_case)
+            except Exception as exc:
+                logger.error(
+                    "[%s] groundedness detector unavailable: %s",
+                    request_id,
+                    type(exc).__name__,
+                )
         logger.debug(f"[{request_id}] groundedness_check stubbed")
         return _mock_groundedness_result(request.use_case)
 
     async def _run_pii_response():
         """Run PII scan on LLM response or return mock."""
         if detect_pii is not None:
-            result = await detect_pii(llm_response)
+            result = await detect_pii(llm_response, scan_target="response")
             result.scan_target = "response"
             return result
         logger.debug(
@@ -665,19 +679,27 @@ async def run_pipeline(
             detect_bias(llm_response),
         )
 
+        any_unavailable = any(
+            result.status == DetectorStatus.UNAVAILABLE
+            for result in (prompt_bias, response_bias)
+        )
+
         # Return whichever has higher risk score
         if prompt_bias.score >= response_bias.score:
             logger.debug(
                 f"[{request_id}] Bias: prompt score {prompt_bias.score:.3f} "
                 f"higher than response score {response_bias.score:.3f}"
             )
-            return prompt_bias
+            selected = prompt_bias
         else:
             logger.debug(
                 f"[{request_id}] Bias: response score {response_bias.score:.3f} "
                 f"higher than prompt score {prompt_bias.score:.3f}"
             )
-            return response_bias
+            selected = response_bias
+        if any_unavailable:
+            selected.status = DetectorStatus.UNAVAILABLE
+        return selected
 
     # THE KEY LINE — all 3 run simultaneously, not sequentially
     groundedness_result, pii_response_result, bias_result = await asyncio.gather(
@@ -720,64 +742,56 @@ async def run_pipeline(
         risk_score = _mock_risk_score(request.use_case, preliminary_risk_level)
         logger.debug(f"[{request_id}] compute_risk stubbed")
 
-    # Policy evaluation (Aman's OPA module)
-    # REAL (Day 3): policy_decision = await evaluate_policy(request.use_case, risk_score)
+    unavailable_detectors = [
+        name
+        for name, result in (
+            ("injection", injection_result),
+            ("pii_prompt", pii_prompt_result),
+            ("pii_response", pii_response_result),
+            ("groundedness", groundedness_result),
+            ("bias", bias_result),
+        )
+        if result.status == DetectorStatus.UNAVAILABLE
+    ]
+
+    # Policy evaluation with a deterministic fail-safe boundary.
     if evaluate_policy is not None:
-        policy_decision = await evaluate_policy(
-            use_case=request.use_case,
-            risk_score=risk_score,
+        try:
+            policy_decision = await evaluate_policy(
+                use_case=request.use_case,
+                risk_score=risk_score,
+                pii_detected=pii_response_result.found,
+                bias_detected=bias_result.detected,
+                secrets_detected=False,
+                injection_detected=injection_result.detected,
+                unavailable_detectors=unavailable_detectors,
+            )
+        except Exception as exc:
+            logger.error(
+                "[%s] policy evaluator unavailable: %s",
+                request_id,
+                type(exc).__name__,
+            )
+            policy_decision = fallback_policy_decision(
+                request.use_case,
+                risk_score,
+                pii_detected=pii_response_result.found,
+                bias_detected=bias_result.detected,
+                injection_detected=injection_result.detected,
+                unavailable_detectors=unavailable_detectors,
+            )
+    else:
+        policy_decision = fallback_policy_decision(
+            request.use_case,
+            risk_score,
             pii_detected=pii_response_result.found,
             bias_detected=bias_result.detected,
-            secrets_detected=False,
-        )
-    else:
-        # Deterministic inline policy fallback — replaces mock that always returned ALLOW
-        use_case_str = (
-            request.use_case.value if hasattr(request.use_case, "value")
-            else str(request.use_case)
-        )
-        BLOCK_THRESHOLDS = {
-            "customer_chatbot": 0.75,
-            "hr_copilot":       0.85,
-            "finance_tool":     0.70,
-        }
-        ESCALATE_THRESHOLDS = {
-            "customer_chatbot": 0.60,
-            "hr_copilot":       0.75,
-            "finance_tool":     0.55,
-        }
-        block_at    = BLOCK_THRESHOLDS.get(use_case_str, 0.75)
-        escalate_at = ESCALATE_THRESHOLDS.get(use_case_str, 0.60)
-
-        if risk_score.overall >= block_at:
-            final_action = ActionType.BLOCK
-            reason = f"Risk score {risk_score.overall:.3f} >= block threshold {block_at}"
-        elif risk_score.overall >= escalate_at:
-            final_action = ActionType.ESCALATE
-            reason = f"Risk score {risk_score.overall:.3f} >= escalate threshold {escalate_at}"
-        elif pii_response_result.found:
-            final_action = ActionType.REDACT
-            reason = "PII detected in response — redacting"
-        elif bias_result.detected and bias_result.score > 0.70:
-            final_action = ActionType.ESCALATE
-            reason = f"Bias detected with score {bias_result.score:.3f}"
-        elif risk_score.breakdown.groundedness_risk > 0.50:
-            final_action = ActionType.REPAIR
-            reason = f"Groundedness risk {risk_score.breakdown.groundedness_risk:.3f} — hallucination detected"
-        else:
-            final_action = ActionType.ALLOW
-            reason = f"Risk score {risk_score.overall:.3f} below all thresholds"
-
-        policy_decision = PolicyDecision(
-            approved=final_action in [ActionType.ALLOW, ActionType.REPAIR, ActionType.REDACT],
-            final_action=final_action,
-            reason=reason,
-            policy_file="inline_policy_fallback",
-            threshold_applied=block_at,
+            injection_detected=injection_result.detected,
+            unavailable_detectors=unavailable_detectors,
         )
         logger.info(
             f"[{request_id}] Inline policy fallback | "
-            f"action={final_action} | reason={reason}"
+            f"action={policy_decision.final_action} | reason={policy_decision.reason}"
         )
 
     # Action execution
@@ -791,18 +805,22 @@ async def run_pipeline(
             use_case=request.use_case,
         )
     else:
+        logger.error(
+            "[%s] action layer unavailable; defaulting to BLOCK",
+            request_id,
+        )
         action_result = ActionResult(
-            action=policy_decision.final_action,
-            final_response=llm_response,
+            action=ActionType.BLOCK,
+            final_response=DEFAULT_BLOCK_MESSAGE,
             original_response=llm_response,
-            explanation="Action layer stubbed — defaulting to policy decision",
+            explanation="Action layer unavailable; response blocked for safety.",
             evidence={
                 "risk_score": risk_score.overall,
                 "risk_level": risk_score.level,
                 "policy_reason": policy_decision.reason,
+                "fallback_rule": "action_layer_unavailable_block",
             },
         )
-        logger.debug(f"[{request_id}] execute_action stubbed")
 
     # Total pipeline latency
     total_latency_ms = max(1, int((time.time() - pipeline_start) * 1000))
@@ -828,13 +846,6 @@ async def run_pipeline(
         latency_ms=total_latency_ms,
         step_latencies=step_latencies,
     )
-
-    # Non-blocking audit log write
-    # REAL (Day 3): asyncio.create_task(log_request(audit_entry))
-    if log_request is not None:
-        asyncio.create_task(log_request(audit_entry))
-    else:
-        logger.debug(f"[{request_id}] audit_logger stubbed — Gaurav's module")
 
     logger.info(
         f"[{request_id}] Step 5 complete | "

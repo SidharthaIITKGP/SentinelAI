@@ -1,7 +1,7 @@
 {
   "model_name": "unitary/toxic-bert",
   "semantic_model_name": "all-MiniLM-L6-v2",
-  "explicit_pattern_threshold": 0.7,
+  "explicit_pattern_threshold": 0.8,
   "model_threshold": 0.7,
   "semantic_threshold": 0.55,
   "final_detection_threshold": 0.62,

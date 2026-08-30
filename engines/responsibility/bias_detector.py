@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from api.schemas import BiasResult
+from api.schemas import BiasResult, DetectorStatus
 
 logger = logging.getLogger("sentinelai")
 
@@ -68,8 +68,11 @@ async def detect_bias(text: str) -> BiasResult:
                     result.detection_method = "semantic_embedding"
                     if not result.flagged_segments:
                         result.flagged_segments = [text[:100]]
-        except Exception as e:
-            logger.debug(f"Semantic toxicity check in bias detector failed: {e}")
+        except Exception as exc:
+            logger.debug(
+                "Optional semantic toxicity check unavailable: %s",
+                type(exc).__name__,
+            )
 
         logger.debug(
             f"Bias scan complete | "
@@ -78,10 +81,11 @@ async def detect_bias(text: str) -> BiasResult:
         )
         return result
 
-    except Exception as e:
-        logger.error(f"Bias detector failed | error={str(e)}")
+    except Exception as exc:
+        logger.error("Bias detector unavailable: %s", type(exc).__name__)
         return BiasResult(
             detected=False,
+            status=DetectorStatus.UNAVAILABLE,
             score=0.0,
             confidence=0.0,
             detection_method="pattern_match",

@@ -51,6 +51,7 @@ from qdrant_client.models import (
 from sentence_transformers import SentenceTransformer
 
 from api.schemas import (
+    DetectorStatus,
     FlaggedClaim,
     GroundednessResult,
     SupportingSource,
@@ -58,6 +59,10 @@ from api.schemas import (
 )
 
 logger = logging.getLogger("sentinelai")
+
+
+class GroundednessUnavailableError(RuntimeError):
+    """Raised when evidence retrieval cannot produce a verification result."""
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -369,11 +374,14 @@ async def _embed_and_search(
                 ),
                 limit=top_k,
             ).points
-        except Exception as _qdrant_err:
+        except Exception as exc:
             logger.warning(
-                f"Qdrant unavailable for groundedness search (non-fatal): {_qdrant_err}"
+                "Qdrant unavailable for groundedness search: %s",
+                type(exc).__name__,
             )
-            return []
+            raise GroundednessUnavailableError(
+                "Groundedness evidence retrieval is unavailable"
+            ) from exc
 
         return [
             {
@@ -534,11 +542,10 @@ async def check(
         LLM says "20 sick days" → source says "10" → score ~0.50 → REPAIR
     """
     if _embedding_model is None or _qdrant_client is None:
-        logger.warning(
-            "Groundedness engine not initialized — returning default score 1.0"
-        )
+        logger.warning("Groundedness engine unavailable; verification not performed")
         return GroundednessResult(
-            score=1.0,
+            status=DetectorStatus.UNAVAILABLE,
+            score=0.0,
             total_claims_checked=0,
             grounded_claims_count=0,
             use_case_kb_used=use_case,
@@ -570,7 +577,20 @@ async def check(
         _check_single_claim(claim, use_case_str, threshold)
         for claim in claims
     ]
-    results = await asyncio.gather(*check_tasks)
+    try:
+        results = await asyncio.gather(*check_tasks)
+    except Exception as exc:
+        logger.warning(
+            "Groundedness verification unavailable during evidence retrieval: %s",
+            type(exc).__name__,
+        )
+        return GroundednessResult(
+            status=DetectorStatus.UNAVAILABLE,
+            score=0.0,
+            total_claims_checked=0,
+            grounded_claims_count=0,
+            use_case_kb_used=use_case,
+        )
 
     # Process results
     flagged_claims: list[FlaggedClaim] = []

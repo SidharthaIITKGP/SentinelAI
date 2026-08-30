@@ -41,6 +41,12 @@ class ActionType(str, Enum):
     ESCALATE = "ESCALATE"
 
 
+class DetectorStatus(str, Enum):
+    """Whether a detector produced an actual result for this request."""
+    AVAILABLE = "AVAILABLE"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
 class BiasType(str, Enum):
     """Categories of bias the bias detector can identify."""
     GENDER_BIAS = "gender_bias"
@@ -292,6 +298,10 @@ class InjectionResult(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     detected: bool = Field(..., description="Was an injection attempt found?")
+    status: DetectorStatus = Field(
+        default=DetectorStatus.AVAILABLE,
+        description="AVAILABLE when the detector ran; UNAVAILABLE on detector failure",
+    )
     confidence: float = Field(
         default=0.0, ge=0.0, le=1.0, description="How confident is the detector?"
     )
@@ -323,6 +333,10 @@ class PIIResult(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     found: bool = Field(..., description="Was any PII detected?")
+    status: DetectorStatus = Field(
+        default=DetectorStatus.AVAILABLE,
+        description="AVAILABLE when the detector ran; UNAVAILABLE on detector failure",
+    )
     entities: List[PIIEntity] = Field(
         default_factory=list, description="List of all PII entities found"
     )
@@ -513,6 +527,10 @@ class BiasResult(BaseModel):
     model_config = ConfigDict(use_enum_values=True)
 
     detected: bool = Field(..., description="Was bias found?")
+    status: DetectorStatus = Field(
+        default=DetectorStatus.AVAILABLE,
+        description="AVAILABLE when the detector ran; UNAVAILABLE on detector failure",
+    )
     score: float = Field(default=0.0, ge=0.0, le=1.0, description="Deprecated alias for risk_score")
     detection_method: str = Field(
         default="pattern_match",
@@ -553,17 +571,10 @@ class BiasResult(BaseModel):
 
     @model_validator(mode="after")
     def validate_consistency(self):
-        """If not detected, clear all bias signal fields."""
+        """Keep observational signals even when they do not cross the verdict threshold."""
         if not self.detected:
             self.bias_types = []
             self.flagged_segments = []
-            self.protected_dimensions = []
-            self.behaviors = []
-            self.evidence = []
-            self.score = 0.0
-            self.risk_score = 0.0
-            self.toxicity_score = 0.0
-            self.identity_hate_score = 0.0
         return self
 
 
@@ -588,6 +599,11 @@ class BiasScanResponse(BaseModel):
 class GroundednessResult(BaseModel):
     """Return type of engines/trust/groundedness.py"""
     model_config = ConfigDict(use_enum_values=True)
+
+    status: DetectorStatus = Field(
+        default=DetectorStatus.AVAILABLE,
+        description="AVAILABLE when verification ran; UNAVAILABLE when it could not run",
+    )
 
     score: float = Field(
         ..., ge=0.0, le=1.0,
@@ -622,6 +638,18 @@ class GroundednessResult(BaseModel):
             )
         return v
 
+    @model_validator(mode="after")
+    def unavailable_is_not_verified(self):
+        """Unavailable verification must never serialize as fully grounded."""
+        if self.status == DetectorStatus.UNAVAILABLE:
+            if self.score != 0.0:
+                raise ValueError("UNAVAILABLE groundedness must use score 0.0")
+            self.total_claims_checked = 0
+            self.grounded_claims_count = 0
+            self.flagged_claims = []
+            self.supporting_sources = []
+        return self
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # Section 4 — Core Pipeline Schemas
@@ -644,13 +672,15 @@ class RiskScore(BaseModel):
 
     @model_validator(mode="after")
     def validate_level_matches_overall(self):
-        """Ensure level is consistent with overall score thresholds."""
-        if self.overall > 0.65:
-            self.level = RiskLevel.HIGH
-        elif self.overall > 0.35:
-            self.level = RiskLevel.MEDIUM
-        else:
-            self.level = RiskLevel.LOW
+        """Reject inconsistent levels; never silently apply another threshold rule."""
+        from core.risk_thresholds import risk_level_value
+
+        expected = risk_level_value(self.overall)
+        if self.level != expected:
+            raise ValueError(
+                f"risk level {self.level} does not match score {self.overall}; "
+                f"expected {expected}"
+            )
         return self
 
 
@@ -680,7 +710,7 @@ class ActionResult(BaseModel):
         """
         BLOCK → final_response must differ from original_response.
         ALLOW → final_response must equal original_response.
-        ESCALATE → escalation_required must be True.
+        ESCALATE → final_response must differ and escalation_required must be True.
         """
         if self.action == ActionType.BLOCK and self.final_response == self.original_response:
             raise ValueError(
@@ -692,6 +722,10 @@ class ActionResult(BaseModel):
             )
         if self.action == ActionType.ESCALATE and not self.escalation_required:
             self.escalation_required = True
+        if self.action == ActionType.ESCALATE and self.final_response == self.original_response:
+            raise ValueError(
+                "ESCALATE action must hold the original LLM response for review"
+            )
         return self
 
 

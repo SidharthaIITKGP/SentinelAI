@@ -54,8 +54,7 @@ async def intercept(request: InterceptRequest) -> InterceptResponse:
         logger.error(f"Pipeline failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
 
-    # Step 3 — persist audit entry (non-blocking already inside pipeline,
-    # but we also await here to get the request_id back for the response)
+    # Step 3 — the route owns the one durable audit write.
     try:
         request_id = await log_request(audit_entry)
     except Exception as e:

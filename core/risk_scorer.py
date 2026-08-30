@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 from api.schemas import (
     BiasResult,
+    DetectorStatus,
     GroundednessResult,
     InjectionResult,
     PIIResult,
@@ -28,6 +29,7 @@ from api.schemas import (
     RiskScore,
     UseCase,
 )
+from core.risk_thresholds import risk_level_value
 
 logger = logging.getLogger("sentinelai")
 
@@ -59,6 +61,33 @@ RISK_WEIGHTS: dict[str, dict[str, float]] = {
         "groundedness":   0.55,
         "bias":           0.10,
         "pii_prompt":     0.05,
+    },
+}
+
+# Conservative signal values used only when a detector did not produce a
+# result. Regulated use cases treat unknown critical checks more strongly than
+# public low-risk traffic, without converting every unavailable check to BLOCK.
+UNAVAILABLE_SIGNAL_RISK: dict[str, dict[str, float]] = {
+    "customer_chatbot": {
+        "injection": 0.30,
+        "pii_prompt": 0.25,
+        "pii_response": 0.25,
+        "groundedness": 0.25,
+        "bias": 0.25,
+    },
+    "hr_copilot": {
+        "injection": 0.65,
+        "pii_prompt": 0.60,
+        "pii_response": 0.60,
+        "groundedness": 0.65,
+        "bias": 0.65,
+    },
+    "finance_tool": {
+        "injection": 0.70,
+        "pii_prompt": 0.70,
+        "pii_response": 0.70,
+        "groundedness": 0.70,
+        "bias": 0.70,
     },
 }
 
@@ -101,14 +130,38 @@ def compute(
 
     # Get weights for this use case
     # Fall back to customer_chatbot weights if use_case not found
-    weights = RISK_WEIGHTS.get(use_case, RISK_WEIGHTS["customer_chatbot"])
+    use_case_key = getattr(use_case, "value", use_case)
+    weights = RISK_WEIGHTS.get(use_case_key, RISK_WEIGHTS["customer_chatbot"])
+    unavailable_risk = UNAVAILABLE_SIGNAL_RISK.get(
+        use_case_key, UNAVAILABLE_SIGNAL_RISK["customer_chatbot"]
+    )
 
     # Extract individual signal scores
-    injection_score = injection.confidence if injection.detected else 0.0
-    pii_prompt_score = pii_prompt.risk_score
-    pii_response_score = pii_response.risk_score
-    groundedness_risk = 1.0 - groundedness.score   # INVERTED — low groundedness = high risk
-    bias_score = bias.score
+    injection_score = (
+        unavailable_risk["injection"]
+        if injection.status == DetectorStatus.UNAVAILABLE
+        else injection.confidence if injection.detected else 0.0
+    )
+    pii_prompt_score = (
+        unavailable_risk["pii_prompt"]
+        if pii_prompt.status == DetectorStatus.UNAVAILABLE
+        else pii_prompt.risk_score
+    )
+    pii_response_score = (
+        unavailable_risk["pii_response"]
+        if pii_response.status == DetectorStatus.UNAVAILABLE
+        else pii_response.risk_score
+    )
+    groundedness_risk = (
+        unavailable_risk["groundedness"]
+        if groundedness.status == DetectorStatus.UNAVAILABLE
+        else 1.0 - groundedness.score
+    )
+    bias_score = (
+        unavailable_risk["bias"]
+        if bias.status == DetectorStatus.UNAVAILABLE
+        else bias.score
+    )
 
     # Weighted sum
     overall = (
@@ -142,14 +195,8 @@ def compute(
         dominant_signal=dominant_signal,
     )
 
-    # Derive level from overall score
-    # Thresholds: HIGH > 0.65, MEDIUM > 0.35, LOW <= 0.35
-    if overall > 0.55:
-        level = RiskLevel.HIGH
-    elif overall > 0.20:
-        level = RiskLevel.MEDIUM
-    else:
-        level = RiskLevel.LOW
+    # Derive level from the one authoritative boundary definition.
+    level = RiskLevel(risk_level_value(overall))
 
     risk_score = RiskScore(
         overall=overall,

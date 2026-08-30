@@ -8,6 +8,11 @@ __pycache__/
 dist/
 build/
 .eggs/
+.python-version
+.cache/
+.hypothesis/
+.pytype/
+.pyre/
 
 # ── Virtual Environment ───────────────────────────────────
 .venv/
@@ -16,12 +21,13 @@ ENV/
 
 # ── Environment Variables ─────────────────────────────────
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # ── IDE / Editor ──────────────────────────────────────────
 .vscode/
 .idea/
+.history/
 *.swp
 *.swo
 *~
@@ -29,15 +35,21 @@ ENV/
 Thumbs.db
 
 # ── Testing ───────────────────────────────────────────────
-tests/
 .pytest_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
+.tox/
+.nox/
+test-results/
+junit.xml
 .mypy_cache/
 .ruff_cache/
 
 # ── Docker ────────────────────────────────────────────────
 *.log
+*.pid
 docker-compose.override.yml
 
 # ── Node / Dashboard ─────────────────────────────────────
@@ -46,17 +58,35 @@ dashboard/node_modules/
 dashboard/dist/
 dashboard/build/
 .next/
+.vite/
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # ── ML Models (large files, don't commit) ─────────────────
 *.bin
 *.pt
 *.onnx
 models/
+huggingface/
+wandb/
+runs/
 
 # ── Database ──────────────────────────────────────────────
 *.db
 *.sqlite3
+postgres_data/
+qdrant_storage/
+redis_data/
 
 # ── Misc ──────────────────────────────────────────────────
 *.bak
 *.tmp
+*.orig
+*.rej
+
+# ── Local Codex / Agent Metadata ───────────────────────────────
+.agents/
+.codex/
